@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#17211b">
+    <title>Naiwa · 奶蛙图像实验室</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#encode" aria-label="Naiwa 首页">
+        <span class="brand-mark" aria-hidden="true">N</span>
+        <span>NAIWA <span class="brand-divider">/</span> 图像实验室</span>
+      </a>
+      <div class="local-badge"><span class="status-dot"></span> 本地处理</div>
+    </header>
+
+    <nav class="tabs" aria-label="工作区">
+      <button class="tab is-active" data-view="encode" type="button">混淆图像</button>
+      <button class="tab" data-view="decode" type="button">还原图像</button>
+      <button class="tab" data-view="benchmark" type="button">压缩评测</button>
+    </nav>
+
+    <main class="page-shell">
+      <section id="encode-view" class="view is-visible" aria-labelledby="encode-title">
+        <div class="workspace-heading">
+          <div>
+            <p class="eyebrow">IMAGE TRANSFORM / 01</p>
+            <h1 id="encode-title">生成混淆图</h1>
+          </div>
+          <span class="file-meta" id="source-meta">尚未选择图像</span>
+        </div>
+
+        <div class="workbench">
+          <aside class="controls">
+            <section class="control-section">
+              <div class="section-heading"><span class="step-index">01</span><h2>原始图像</h2></div>
+              <input id="source-file" class="visually-hidden" type="file" accept="image/*">
+              <button class="upload-zone" id="source-picker" type="button">
+                <span class="upload-plus" aria-hidden="true">+</span>
+                <span class="upload-copy"><strong id="source-file-name">选择一张图片</strong><small>或拖放到此处</small></span>
+              </button>
+            </section>
+
+            <section class="control-section">
+              <div class="section-heading"><span class="step-index">02</span><h2>伪装预设</h2></div>
+              <div class="preset-list" id="preset-list" role="radiogroup" aria-label="奶蛙预设图"></div>
+            </section>
+
+            <section class="control-section basic-settings">
+              <div class="section-heading"><span class="step-index">03</span><h2>输出设置</h2></div>
+              <div class="field-line"><label class="field-label" for="jpg-quality">JPG 质量</label><output id="jpg-quality-value" for="jpg-quality">75%</output></div>
+              <input id="jpg-quality" type="range" min="50" max="95" step="1" value="75" aria-describedby="jpg-quality-hint">
+              <div class="range-labels"><span>文件更小</span><span>画面更细腻</span></div>
+              <div class="output-size-line" aria-live="polite" aria-atomic="true"><span>下载文件大小</span><strong id="output-size">生成后显示</strong></div>
+              <p class="field-hint" id="jpg-quality-hint">生成后可继续调节，实时显示 JPG 的实际大小。</p>
+              <div class="field-line spaced-label"><label class="field-label" for="balance">还原偏好</label><output id="balance-value" for="balance">均衡</output></div>
+              <input id="balance" type="range" min="0" max="100" step="1" value="50" aria-describedby="balance-hint">
+              <div class="range-labels"><span>还原画质优先</span><span>抗压鲁棒优先</span></div>
+              <p class="field-hint" id="balance-hint">自动搭配处理参数；生成后调整会自动更新结果。</p>
+            </section>
+
+            <details class="advanced-settings" id="advanced-settings">
+              <summary>高级模式<span>参数与评测数据</span></summary>
+              <div class="advanced-content">
+              <p class="field-hint">默认自动选择参数。开启手动调整后使用下方设置。</p>
+              <label class="checkbox-label"><input id="manual-parameters" type="checkbox">手动调整算法参数</label>
+              <fieldset id="manual-fields" disabled>
+              <label class="field-label" for="tile-size">原图分块边长</label>
+              <select id="tile-size" class="text-input"><option value="8">8 × 8 px · 细分块</option><option value="16">16 × 16 px</option><option value="32">32 × 32 px · 对照</option></select>
+              <label class="field-label spaced-label" for="carrier-scale">输出载体倍率</label>
+              <select id="carrier-scale" class="text-input"><option value="1">1 倍 · 原始尺寸</option><option value="2" selected>2 倍 · 更多坐标容量</option><option value="3">3 倍</option></select>
+              <p class="field-hint">放大后仍按原图 8 px 分块，还原回原始尺寸；体积评测包含放大的代价。</p>
+              <label class="field-label spaced-label" for="color-adapt">块级颜色适配</label>
+              <select id="color-adapt" class="text-input"><option value="yes">启用 · 记录并还原块均色</option><option value="no">关闭 · 只重排</option></select>
+              <label class="field-label spaced-label" for="color-gain">块内细节保留</label>
+              <select id="color-gain" class="text-input"><option value="1">100% · 原块对比度</option><option value="0.75" selected>75% · 兼顾预设与还原</option><option value="0.5">50% · 预设优先</option></select>
+              <label class="field-label spaced-label" for="preset-fit">预设尺寸适配</label>
+              <select id="preset-fit" class="text-input"><option value="contain">完整显示 · 留白</option><option value="cover">铺满 · 居中裁切</option><option value="stretch">拉伸铺满</option></select>
+              <div class="field-line spaced-label"><label class="field-label" for="strength">水印强度</label><output id="strength-value" for="strength">16</output></div>
+              <input id="strength" type="range" min="4" max="40" step="2" value="16">
+              <div class="range-labels"><span>画质优先</span><span>鲁棒优先</span></div>
+              </fieldset>
+              <label class="field-label spaced-label" for="preset-threshold">评测筛选相似度下限</label>
+              <input id="preset-threshold" class="text-input" type="number" min="0" max="1" step="0.05" value="0.50">
+              <p class="field-hint">仅用于压缩评测中的候选筛选，不影响下载。外观可直接通过预览判断。</p>
+              <div class="advanced-stats" aria-live="polite">
+                <p id="applied-options">生成后显示实际采用的参数</p>
+                <p id="preset-score">生成后显示预设轮廓与细节 SSIM</p>
+                <p id="restore-metrics">生成后显示 JPG 还原 SSIM</p>
+              </div>
+              <button class="quiet-button wide-button" id="download-png" type="button" disabled>另存压缩前 PNG</button>
+              </div>
+            </details>
+
+            <button class="primary-button" id="encode-button" type="button" disabled>生成混淆图</button>
+            <p class="privacy-note">图像仅在此设备处理。透明像素统一合成到白底，恢复的是白底可见图，不保留透明通道。坐标水印及有损压缩会改变像素。</p>
+          </aside>
+
+          <section class="preview-area" aria-label="图像预览">
+            <div class="preview-toolbar">
+              <div class="segmented" role="group" aria-label="预览内容">
+                <button class="preview-choice is-active" data-preview="compare" type="button">对照</button>
+                <button class="preview-choice" data-preview="mosaic" type="button">混淆图</button>
+                <button class="preview-choice" data-preview="restored" type="button">还原结果</button>
+              </div>
+              <button class="quiet-button" id="download-button" type="button" disabled>下载 JPG</button>
+            </div>
+            <div class="preview-grid" id="preview-grid">
+              <figure class="preview-panel" data-panel="source">
+                <figcaption><span>原图</span><span id="source-dimensions">等待上传</span></figcaption>
+                <div class="canvas-wrap"><canvas id="source-preview" aria-label="原始图像预览"></canvas><div class="empty-state" id="source-empty">选择图像后预览会显示在这里</div></div>
+              </figure>
+              <figure class="preview-panel" data-panel="mosaic">
+                <figcaption><span>混淆图</span><span id="mosaic-dimensions">等待生成</span></figcaption>
+                <div class="canvas-wrap"><canvas id="mosaic-preview" aria-label="混淆图预览"></canvas><div class="empty-state" id="mosaic-empty">选择预设并生成</div></div>
+              </figure>
+              <figure class="preview-panel advanced-preview" data-panel="target" hidden>
+                <figcaption><span>适配后的预设</span><span>与混淆图同尺寸</span></figcaption>
+                <div class="canvas-wrap"><canvas id="target-preview" aria-label="适配后的预设图"></canvas><div class="empty-state" id="target-empty">保留完整预设，透明区域使用白底</div></div>
+              </figure>
+              <figure class="preview-panel restored-panel" data-panel="restored">
+                <figcaption><span>JPG 还原预览</span><span id="restored-score">等待生成</span></figcaption>
+                <div class="canvas-wrap"><canvas id="restored-preview" aria-label="下载 JPG 的还原结果预览"></canvas><div class="empty-state" id="restored-empty">生成后显示最终 JPG 的还原效果</div></div>
+              </figure>
+            </div>
+            <div class="result-strip" id="result-strip" aria-live="polite">
+              <span class="result-indicator"></span><span id="result-summary">等待处理</span>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="decode-view" class="view" aria-labelledby="decode-title" hidden>
+        <div class="workspace-heading">
+          <div><p class="eyebrow">IMAGE TRANSFORM / 02</p><h1 id="decode-title">还原混淆图</h1></div>
+          <span class="file-meta" id="encoded-meta">选择包含坐标信息的图像</span>
+        </div>
+        <div class="decode-layout">
+          <aside class="controls decode-controls">
+            <section class="control-section">
+              <div class="section-heading"><span class="step-index">01</span><h2>混淆图文件</h2></div>
+              <input id="encoded-file" class="visually-hidden" type="file" accept="image/*">
+              <button class="upload-zone" id="encoded-picker" type="button">
+                <span class="upload-plus" aria-hidden="true">+</span>
+                <span class="upload-copy"><strong id="encoded-file-name">选择混淆图</strong><small>PNG、JPEG、WebP</small></span>
+              </button>
+            </section>
+            <button class="primary-button" id="decode-button" type="button" disabled>还原图像</button>
+            <button class="quiet-button wide-button" id="download-restored" type="button" disabled>下载还原 PNG</button>
+            <p class="privacy-note">原始尺寸需保持不变。社交平台若缩放、裁切或重采样，坐标网格可能无法读取。</p>
+          </aside>
+          <section class="decode-preview">
+            <figure class="preview-panel">
+              <figcaption><span>还原结果</span><span id="decode-dimensions">等待解码</span></figcaption>
+              <div class="canvas-wrap decode-canvas-wrap"><canvas id="decode-preview" aria-label="还原图像预览"></canvas><div class="empty-state" id="decode-empty">选择混淆图文件</div></div>
+              <div class="decode-message" id="decode-message" aria-live="polite">等待输入</div>
+            </figure>
+          </section>
+        </div>
+      </section>
+
+      <section id="benchmark-view" class="view" aria-labelledby="benchmark-title" hidden>
+        <div class="workspace-heading benchmark-heading">
+          <div><p class="eyebrow">JPEG ROBUSTNESS / 03</p><h1 id="benchmark-title">压缩权衡曲线</h1></div>
+          <span class="file-meta">每张测试图等权平均</span>
+        </div>
+        <div class="benchmark-controls">
+          <label class="benchmark-select"><span>测试图片</span><select id="test-count"><option value="1">1 张</option><option value="3" selected>3 张</option><option value="5">5 张</option><option value="10">10 张</option><option value="24">全部 24 张</option></select></label>
+          <label class="benchmark-select"><span>伪装预设</span><select id="benchmark-preset"></select></label>
+          <label class="benchmark-select"><span>参数组</span><select id="benchmark-mode"><option value="current">当前参数</option><option value="batch">批量 · 8 px / 2、3 倍 / 强度 8、16、24</option></select></label>
+          <button class="primary-button benchmark-button" id="benchmark-button" type="button">运行评测</button>
+          <button class="quiet-button" id="csv-button" type="button" disabled>导出 CSV</button>
+        </div>
+        <div class="benchmark-progress" id="benchmark-progress" aria-live="polite">默认使用自动参数；手动参数与评测筛选门槛可在高级模式中设置。整批完成后统一汇总。</div>
+        <section class="chart-panel">
+          <div class="chart-legend" id="chart-legend"><span>实心点：每张图相似度达标且全部恢复成功；空心点：未达标</span></div>
+          <canvas id="benchmark-chart" role="img" aria-label="还原与直接压缩的 SSIM 对比曲线"></canvas>
+        </section>
+        <section class="chart-panel"><div class="chart-legend">混淆图与预设轮廓相似度 · 显示所有样本的最小值与门槛</div><canvas id="preset-chart" role="img" aria-label="压缩体积与预设相似度曲线"></canvas></section>
+        <p class="similarity-readout" id="benchmark-selection">待筛选三指标 Pareto 候选</p>
+        <div class="results-table-wrap">
+          <table class="results-table">
+            <thead><tr><th>参数组</th><th>JPEG 质量</th><th>混淆图体积</th><th>还原 SSIM</th><th>预设轮廓 / 最低</th><th>预设细节</th><th>坐标读取</th><th>原图体积</th><th>原图 SSIM</th><th>筛选</th></tr></thead>
+            <tbody id="benchmark-results"><tr><td colspan="10" class="table-empty">运行评测后显示平均结果</td></tr></tbody>
+          </table>
+        </div>
+        <p class="benchmark-footnote">面积平均后按 8×8 局部窗口估算 SSIM：恢复图比较最长边 512 px 的亮度，预设轮廓比较 64 px 的 RGB，预设细节比较 512 px 的 RGB。相似度门槛逐图检查，恢复失败计 0 分；体积包含完整输出，以原文件字节数为基准。透明图与 JPEG 基线均使用白底。仅当前样本达标不能保证其他图片；缩放、裁切会破坏坐标。</p>
+        <p class="benchmark-footnote"><a href="./reports/compare.html" target="_blank" rel="noopener">查看已保存的原始分辨率批次，交互调整门槛并比较全部候选</a> · <a href="./reports/index.html" target="_blank" rel="noopener">历次曲线、CSV 与实际对照图</a></p>
+      </section>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <footer class="site-footer"><span>Naiwa · GPL-3.0-or-later</span><span>本地优先 · 文件不离开设备</span></footer>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>
