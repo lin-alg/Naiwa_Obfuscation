@@ -10,7 +10,7 @@ import { decode, jpeg } from './image-io.mjs';
 const args = process.argv.slice(2);
 const option = (name, fallback) => args.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const list = (name, fallback) => option(name, fallback).split(',').map(Number);
-const count = Math.max(1, Number(option('count', 3)));
+const count = Math.max(1, Number(option('count', 4)));
 const qualities = list('qualities', '95,85,75,65,55');
 const tiles = list('tiles', '8');
 const scales = list('scales', '2');
@@ -74,7 +74,7 @@ for (let imageIndex = 0; imageIndex < entries.length; imageIndex += 1) {
       try { encoded = await encodeImage(source, preset, { ...config, fit }); }
       catch (error) { failures.push({ image: entry.name, presetId, config: config.id, stage: 'encode', error: error.message }); continue; }
       const output = { width: encoded.plan.outputWidth, height: encoded.plan.outputHeight, data: encoded.data };
-      const target = fitImage(preset, output.width, output.height, fit);
+      const target = fitImage(preset, output.width, output.height, fit, encoded.plan.panels);
       const raw = { config: config.id, image: entry.name, width, height, presetId, outline: encoded.resemblance.outline, detail: encoded.resemblance.detail };
       try {
         const restored = await restoreImage(output);

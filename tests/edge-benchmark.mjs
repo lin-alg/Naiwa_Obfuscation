@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { writeFile } from 'node:fs/promises';
-import { encodeImage, fitImage, flattenImage, imageSimilarity, presetSimilarity, restoreImage } from '../core.mjs';
+import { FORMAT_VERSION, encodeImage, fitImage, flattenImage, imageSimilarity, presetSimilarity, restoreImage } from '../core.mjs';
 import { decode, jpeg } from './image-io.mjs';
 
 function makeImage(width, height, transparent) {
@@ -20,7 +20,7 @@ for (const [width, height] of [[319, 173], [17, 129], [97, 211]]) {
     const reference = flattenImage(source);
     const encoded = await encodeImage(source, preset, { tileSize: 8, scale: 2, step: 16, colorGain: 0.75, fit });
     const output = { width: encoded.plan.outputWidth, height: encoded.plan.outputHeight, data: encoded.data };
-    const target = fitImage(preset, output.width, output.height, fit);
+    const target = fitImage(preset, output.width, output.height, fit, encoded.plan.panels);
     for (const quality of [null, 95, 75]) {
       const bytes = quality ? await jpeg(output, quality) : null;
       const image = quality ? await decode(bytes, output.width, output.height) : output;
@@ -38,7 +38,7 @@ for (const [width, height] of [[319, 173], [17, 129], [97, 211]]) {
     }
   }
 }
-const report = { version: 5, threshold: 0.5, notes: 'Synthetic edge cases, independently reported; source and preset alpha composited over white; these do not contribute to photo means.', records };
+const report = { version: FORMAT_VERSION, threshold: 0.5, notes: 'Synthetic edge cases, independently reported; preset padding retains alpha and is composited over white for JPEG; these do not contribute to photo means.', records };
 const root = new URL('../reports/', import.meta.url);
 await writeFile(new URL('edge-cases.json', root), JSON.stringify(report, null, 2));
 const columns = ['width', 'height', 'fit', 'quality', 'scale', 'outputWidth', 'outputHeight', 'presetSSIM', 'presetDetail', 'restoredSSIM', 'decoded', 'eligible'];

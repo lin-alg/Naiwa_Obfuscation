@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { encodeRS, decodeRS, crc32 } from './reed-solomon.mjs';
 
-export const FORMAT_VERSION = 5;
+export const FORMAT_VERSION = 6;
 const VERSION = FORMAT_VERSION;
 const HEADER_BYTES = 24;
 const HEADER_REPEATS = 7;
@@ -20,6 +20,9 @@ const BASIS = FREQUENCIES.map(([u, v]) => Float64Array.from({ length: 64 }, (_, 
   ((u ? 1 : Math.SQRT1_2) * (v ? 1 : Math.SQRT1_2) / 4) *
   Math.cos(((2 * (index & 7) + 1) * u * Math.PI) / 16) *
   Math.cos(((2 * (index >> 3) + 1) * v * Math.PI) / 16)));
+const DCT_COS = Array.from({ length: 8 }, (_, frequency) => Float64Array.from({ length: 8 }, (_, position) =>
+  Math.cos(((2 * position + 1) * frequency * Math.PI) / 16)));
+const DCT_NORM = Float64Array.from({ length: 8 }, (_, frequency) => frequency ? 1 : Math.SQRT1_2);
 const JPEG_LUMA = [
   16, 11, 10, 16, 24, 40, 51, 61,
   12, 12, 14, 19, 26, 58, 60, 55,
@@ -37,21 +40,37 @@ export function createPlan(width, height, options = {}) {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 65535 || height > 65535) {
     throw new Error('图像尺寸无效。');
   }
+  const version = options.version ?? VERSION;
   const tileSize = Number(options.tileSize ?? 8);
   const requestedScale = Number(options.scale ?? 2);
   const scale = Math.min(width, height) < 64 ? Math.max(3, requestedScale) : requestedScale;
   const colorAdapt = options.colorAdapt !== false;
   const colorGain = colorAdapt ? Number(options.colorGain ?? 0.75) : 1;
-  if (![1, 0.75, 0.5].includes(colorGain)) throw new Error('块内细节保留系数应为 1、0.75 或 0.5。');
-  if (![8, 16, 32].includes(tileSize)) throw new Error('分块边长应为 8、16 或 32 像素。');
-  if (![1, 2, 3].includes(requestedScale)) throw new Error('载体倍率应为 1、2 或 3。');
+  if (![1, 0.75, 0.5, 0.25].includes(colorGain)) throw new Error('块内细节保留系数应为 100%、75%、50% 或 25%。');
+  if (version === 5 ? ![4, 8, 16, 32].includes(tileSize) : !Number.isInteger(tileSize) || tileSize < 2 || (tileSize > 16 && tileSize !== 32)) {
+    throw new Error(version === 5 ? '旧版分块边长应为 4、8、16 或 32 像素。' : '分块边长应为 2 到 16 像素的整数。');
+  }
+  const validScale = version === 5
+    ? [1, 2, 3]
+    : Array.from({ length: 15 }, (_, index) => (index + 2) / 2);
+  if (!validScale.includes(requestedScale)) throw new Error(version === 5 ? '旧版载体倍率应为 1、2 或 3。' : '载体倍率应为 1 到 8 倍、每次 0.5 倍。');
   // Small/narrow images are padded, never silently cropped or resampled.
-  const outputTileSize = tileSize * scale;
-  const outputWidth = Math.ceil(Math.max(width, 64) / tileSize) * outputTileSize;
-  const outputHeight = Math.ceil(Math.max(height, 64) / tileSize) * outputTileSize;
+  // A half-step carrier can produce a fractional tile for odd-sized source
+  // blocks. Round the actual pixel tile and use the derived ratio everywhere
+  // else so every integer tile size remains selectable.
+  const outputTileSize = Math.max(1, Math.round(tileSize * scale));
+  const pixelScale = outputTileSize / tileSize;
+  let divisor = outputTileSize; let remainder = 8;
+  while (remainder) [divisor, remainder] = [remainder, divisor % remainder];
+  const alignment = 8 / divisor;
+  const outputWidth = Math.ceil(Math.max(width, 64) / tileSize / alignment) * alignment * outputTileSize;
+  const outputHeight = Math.ceil(Math.max(height, 64) / tileSize / alignment) * alignment * outputTileSize;
   const columns = outputWidth / outputTileSize;
   const rows = outputHeight / outputTileSize;
   const tileCount = columns * rows;
+  const aspect = Math.max(columns, rows) / Math.min(columns, rows);
+  const panels = version === 5 ? 1 : Number(options.panels ?? (aspect > 3 ? Math.min(32, Math.round(aspect)) : 1));
+  if (!Number.isInteger(panels) || panels < 1 || panels > Math.min(32, Math.max(columns, rows))) throw new Error('分段数量无效。');
   const coordinateBits = Math.ceil(Math.log2(tileCount));
   const payloadBits = coordinateBits + (colorAdapt ? 18 : 0);
   const payloadBytes = Math.ceil(tileCount * payloadBits / 8);
@@ -60,7 +79,7 @@ export function createPlan(width, height, options = {}) {
   const blockCount = outputWidth * outputHeight / 64;
   const frequencyCount = [8, 16, 24, 32, 40, 48, 56, 63].find((count) => count * blockCount >= encodedBytes * 8 + HEADER_CARRIERS);
   if (!frequencyCount) throw new Error('图片太小，无法容纳细分块坐标与纠错信息；请换用更大图片。');
-  return { width, height, outputWidth, outputHeight, tileSize, outputTileSize, scale, colorAdapt, colorGain, columns, rows, tileCount, coordinateBits, payloadBits, payloadBytes, codeBlocks, encodedBytes, blockCount, frequencyCount };
+  return { version, width, height, outputWidth, outputHeight, tileSize, outputTileSize, scale, pixelScale, colorAdapt, colorGain, panels, columns, rows, tileCount, coordinateBits, payloadBits, payloadBytes, codeBlocks, encodedBytes, blockCount, frequencyCount };
 }
 
 export function flattenImage(image, background = [255, 255, 255]) {
@@ -75,10 +94,25 @@ export function flattenImage(image, background = [255, 255, 255]) {
   return { width: image.width, height: image.height, data, transparentPixels };
 }
 
-export function fitImage(image, width, height, mode = 'contain') {
+export function fitImage(image, width, height, mode = 'contain', panels = 1) {
   if (!['contain', 'cover', 'stretch'].includes(mode)) throw new Error('未知的预设适配模式。');
-  const input = flattenImage(image);
-  const data = new Uint8ClampedArray(width * height * 4).fill(255);
+  if (panels > 1) {
+    const data = new Uint8ClampedArray(width * height * 4);
+    const horizontal = width >= height;
+    const length = horizontal ? width : height;
+    for (let part = 0; part < panels; part += 1) {
+      const start = Math.round(part * length / panels);
+      const end = Math.round((part + 1) * length / panels);
+      const fitted = fitImage(image, horizontal ? end - start : width, horizontal ? height : end - start, mode);
+      for (let y = 0; y < fitted.height; y += 1) {
+        const destination = ((horizontal ? y : y + start) * width + (horizontal ? start : 0)) * 4;
+        data.set(fitted.data.subarray(y * fitted.width * 4, (y + 1) * fitted.width * 4), destination);
+      }
+    }
+    return { width, height, data };
+  }
+  const input = image;
+  const data = new Uint8ClampedArray(width * height * 4);
   const scale = mode === 'cover' ? Math.max(width / image.width, height / image.height) : Math.min(width / image.width, height / image.height);
   const drawWidth = mode === 'stretch' ? width : image.width * scale;
   const drawHeight = mode === 'stretch' ? height : image.height * scale;
@@ -97,10 +131,13 @@ export function fitImage(image, width, height, mode = 'contain') {
       const fx = sx - x0;
       const fy = sy - y0;
       const pixel = (y * width + x) * 4;
-      for (let c = 0; c < 3; c += 1) {
-        const a = input.data[(y0 * image.width + x0) * 4 + c] * (1 - fx) + input.data[(y0 * image.width + x1) * 4 + c] * fx;
-        const b = input.data[(y1 * image.width + x0) * 4 + c] * (1 - fx) + input.data[(y1 * image.width + x1) * 4 + c] * fx;
-        data[pixel + c] = a * (1 - fy) + b * fy;
+      const p00 = (y0 * image.width + x0) * 4; const p10 = (y0 * image.width + x1) * 4;
+      const p01 = (y1 * image.width + x0) * 4; const p11 = (y1 * image.width + x1) * 4;
+      const w00 = (1 - fx) * (1 - fy); const w10 = fx * (1 - fy); const w01 = (1 - fx) * fy; const w11 = fx * fy;
+      const alpha = input.data[p00 + 3] * w00 + input.data[p10 + 3] * w10 + input.data[p01 + 3] * w01 + input.data[p11 + 3] * w11;
+      data[pixel + 3] = alpha;
+      if (alpha > 0) for (let c = 0; c < 3; c += 1) {
+        data[pixel + c] = (input.data[p00 + c] * input.data[p00 + 3] * w00 + input.data[p10 + c] * input.data[p10 + 3] * w10 + input.data[p01 + c] * input.data[p01 + 3] * w01 + input.data[p11 + c] * input.data[p11 + 3] * w11) / alpha;
       }
     }
   }
@@ -111,7 +148,7 @@ function padSource(source, plan) {
   const output = new Uint8ClampedArray(plan.outputWidth * plan.outputHeight * 4);
   for (let y = 0; y < plan.outputHeight; y += 1) {
     for (let x = 0; x < plan.outputWidth; x += 1) {
-      const from = (Math.min(Math.floor(y / plan.scale), source.height - 1) * source.width + Math.min(Math.floor(x / plan.scale), source.width - 1)) * 4;
+       const from = (Math.min(Math.floor(y / plan.pixelScale), source.height - 1) * source.width + Math.min(Math.floor(x / plan.pixelScale), source.width - 1)) * 4;
       output.set(source.data.subarray(from, from + 4), (y * plan.outputWidth + x) * 4);
     }
   }
@@ -142,6 +179,11 @@ function matchTiles(source, target, plan) {
   const a = tileFeatures(source, plan);
   const b = tileFeatures(target, plan);
   const mapping = new Uint32Array(plan.tileCount);
+  const tieBreakers = Uint32Array.from({ length: plan.tileCount }, (_, id) => {
+    let value = Math.imul(id ^ (id >>> 16), 0x45d9f3b);
+    value = Math.imul(value ^ (value >>> 16), 0x45d9f3b);
+    return (value ^ (value >>> 16)) >>> 0;
+  });
   // Balanced recursive color partition avoids discontinuities of Morton ordering.
   function partition(sourceIds, targetIds) {
     if (sourceIds.length === 1) { mapping[targetIds[0]] = sourceIds[0]; return; }
@@ -155,14 +197,25 @@ function matchTiles(source, target, plan) {
       const range = (highA - lowA) * (highB - lowB);
       if (range > best) { axis = c; best = range; }
     }
-    sourceIds.sort((i, j) => a[i * 3 + axis] - a[j * 3 + axis] || i - j);
-    targetIds.sort((i, j) => b[i * 3 + axis] - b[j * 3 + axis] || i - j);
+    // Flat preset backgrounds must not assign the palest source blocks only
+    // to the bottom/right edge. Stable spatial mixing avoids visible bands.
+    sourceIds.sort((i, j) => a[i * 3 + axis] - a[j * 3 + axis] || tieBreakers[i] - tieBreakers[j] || i - j);
+    targetIds.sort((i, j) => b[i * 3 + axis] - b[j * 3 + axis] || tieBreakers[i] - tieBreakers[j] || i - j);
     const middle = Math.floor(sourceIds.length / 2);
     partition(sourceIds.slice(0, middle), targetIds.slice(0, middle));
     partition(sourceIds.slice(middle), targetIds.slice(middle));
   }
-  const ids = Array.from({ length: plan.tileCount }, (_, i) => i);
-  partition(ids.slice(), ids);
+  const horizontal = plan.columns >= plan.rows;
+  for (let part = 0; part < plan.panels; part += 1) {
+    const length = horizontal ? plan.columns : plan.rows;
+    const start = Math.round(part * length / plan.panels);
+    const end = Math.round((part + 1) * length / plan.panels);
+    const ids = [];
+    for (let y = horizontal ? 0 : start; y < (horizontal ? plan.rows : end); y += 1) {
+      for (let x = horizontal ? start : 0; x < (horizontal ? end : plan.columns); x += 1) ids.push(y * plan.columns + x);
+    }
+    partition(ids.slice(), ids);
+  }
   return mapping;
 }
 
@@ -207,18 +260,18 @@ function makeHeader(plan, step, checksum) {
   view.setUint16(8, plan.height, true);
   view.setUint32(10, checksum, true);
   view.setUint32(14, plan.payloadBytes, true);
-  bytes[18] = plan.scale;
-  bytes[19] = plan.colorAdapt ? 1 + [1, 0.75, 0.5].indexOf(plan.colorGain) * 2 : 0;
+  bytes[18] = plan.scale * 2;
+  bytes[19] = (plan.colorAdapt ? 1 + [1, 0.75, 0.5, 0.25].indexOf(plan.colorGain) * 2 : 0) | ((plan.panels - 1) << 3);
   view.setUint32(20, crc32(bytes.subarray(0, 20)), true);
   return bytes;
 }
 
 function parseHeader(bytes, width, height) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (bytes[0] !== 0x4e || bytes[1] !== 0x57 || bytes[2] !== VERSION || view.getUint32(20, true) !== crc32(bytes.subarray(0, 20))) {
+  if (bytes[0] !== 0x4e || bytes[1] !== 0x57 || ![5, VERSION].includes(bytes[2]) || view.getUint32(20, true) !== crc32(bytes.subarray(0, 20))) {
     throw new Error('没有找到有效的新版 Naiwa 坐标信息；文件可能被缩放、裁切或过度压缩。');
   }
-  const plan = createPlan(view.getUint16(6, true), view.getUint16(8, true), { tileSize: bytes[3], scale: bytes[18], colorAdapt: Boolean(bytes[19] & 1), colorGain: [1, 0.75, 0.5][bytes[19] >> 1] });
+  const plan = createPlan(view.getUint16(6, true), view.getUint16(8, true), { version: bytes[2], tileSize: bytes[3], scale: bytes[18] / (bytes[2] >= 6 ? 2 : 1), panels: (bytes[19] >> 3) + 1, colorAdapt: Boolean(bytes[19] & 1), colorGain: [1, 0.75, 0.5, 0.25][(bytes[19] >> 1) & 3] });
   if (plan.outputWidth !== width || plan.outputHeight !== height || plan.frequencyCount !== bytes[5] || plan.payloadBytes !== view.getUint32(14, true) || bytes[4] < 4 || bytes[4] > 96) {
     throw new Error('图像尺寸或坐标参数校验失败。');
   }
@@ -265,7 +318,13 @@ function unprotectPayload(bytes, plan) {
 }
 
 // Bootstrap uses one low frequency per DCT block, then another pass if needed.
-function headerSlot(block, frequency, blockCount) {
+function headerSlot(block, frequency, blockCount, version) {
+  if (version >= 6) {
+    const count = Math.min(blockCount, HEADER_CARRIERS - frequency * blockCount);
+    if (count <= 0) return -1;
+    const rank = Math.ceil(block * count / blockCount);
+    return rank < count && Math.floor(rank * blockCount / count) === block ? frequency * blockCount + rank : -1;
+  }
   const slot = frequency * blockCount + block;
   return slot < HEADER_CARRIERS ? slot : -1;
 }
@@ -275,15 +334,24 @@ function frequencyStep(frequency, strength) {
   return strength * Math.max(1, JPEG_LUMA[v * 8 + u] / 16);
 }
 
+function bootstrapStep(blockCount, version) {
+  return version >= 6 && blockCount < HEADER_CARRIERS ? 64 : HEADER_STEP;
+}
+
 async function watermark(data, plan, step, header, payload, read, onProgress) {
   const headerVotes = new Uint8Array(HEADER_BYTES * 8);
   const extracted = read ? new Uint8Array(plan.encodedBytes) : null;
   const block = new Float64Array(64);
   const changes = new Float64Array(64);
+  const rowTransform = new Float64Array(64);
+  const coefficients = new Float64Array(plan.frequencyCount);
+  const usedU = [...new Set(FREQUENCIES.slice(0, plan.frequencyCount).map(([u]) => u))];
   const width = plan.outputWidth;
   const blocksAcross = width / 8;
   let payloadBit = 0;
   const totalBits = plan.encodedBytes * 8;
+  const payloadCapacity = plan.blockCount * plan.frequencyCount - HEADER_CARRIERS;
+  let availableSlot = 0;
   for (let index = 0; index < plan.blockCount; index += 1) {
     const x = index % blocksAcross * 8;
     const y = Math.floor(index / blocksAcross) * 8;
@@ -291,15 +359,35 @@ async function watermark(data, plan, step, header, payload, read, onProgress) {
       const pixel = ((y + (p >> 3)) * width + x + (p & 7)) * 4;
       block[p] = 0.299 * data[pixel] + 0.587 * data[pixel + 1] + 0.114 * data[pixel + 2];
     }
+    for (let row = 0; row < 8; row += 1) for (const u of usedU) {
+      let sum = 0;
+      const offset = row * 8;
+      for (let column = 0; column < 8; column += 1) sum += block[offset + column] * DCT_COS[u][column];
+      rowTransform[offset + u] = sum;
+    }
+    for (let f = 0; f < plan.frequencyCount; f += 1) {
+      const [u, v] = FREQUENCIES[f];
+      let sum = 0;
+      for (let row = 0; row < 8; row += 1) sum += rowTransform[row * 8 + u] * DCT_COS[v][row];
+      coefficients[f] = sum * DCT_NORM[u] * DCT_NORM[v] / 4;
+    }
     if (!read) changes.fill(0);
     for (let f = 0; f < plan.frequencyCount; f += 1) {
-      const slot = headerSlot(index, f, plan.blockCount);
-      if (slot < 0 && payloadBit >= totalBits) continue;
+      const slot = headerSlot(index, f, plan.blockCount, plan.version);
+      let bitIndex;
+      if (slot >= 0) bitIndex = Math.floor(slot / HEADER_REPEATS);
+      else if (plan.version >= 6) {
+        bitIndex = Math.ceil(availableSlot * totalBits / payloadCapacity);
+        const selected = bitIndex < totalBits && Math.floor(bitIndex * payloadCapacity / totalBits) === availableSlot;
+        availableSlot += 1;
+        if (!selected) continue;
+      } else {
+        if (payloadBit >= totalBits) continue;
+        bitIndex = payloadBit;
+      }
       const basis = BASIS[f];
-      let coefficient = 0;
-      for (let p = 0; p < 64; p += 1) coefficient += block[p] * basis[p];
-      const quantization = slot >= 0 ? HEADER_STEP : frequencyStep(f, step);
-      const bitIndex = slot >= 0 ? Math.floor(slot / HEADER_REPEATS) : payloadBit;
+      const coefficient = coefficients[f];
+      const quantization = slot >= 0 ? bootstrapStep(plan.blockCount, plan.version) : frequencyStep(f, step);
       if (read) {
         const bit = ((Math.round(coefficient / quantization) % 2) + 2) % 2;
         if (slot >= 0) headerVotes[bitIndex] += bit;
@@ -339,13 +427,14 @@ async function watermark(data, plan, step, header, payload, read, onProgress) {
   return { header: headerBytes, payload: extracted };
 }
 
-function readHeader(image) {
+function readHeaderVersion(image, version) {
   const { width, height, data } = image;
   if (width % 8 || height % 8) throw new Error('混淆图尺寸必须保持完整的 8 像素网格。');
   const blockCount = width * height / 64;
   const votes = new Uint8Array(HEADER_BYTES * 8);
   for (let slot = 0; slot < HEADER_CARRIERS; slot += 1) {
-    const block = slot % blockCount;
+    const count = Math.min(blockCount, HEADER_CARRIERS - Math.floor(slot / blockCount) * blockCount);
+    const block = version >= 6 ? Math.floor((slot % blockCount) * blockCount / count) : slot % blockCount;
     const frequency = Math.floor(slot / blockCount);
     if (!BASIS[frequency]) throw new Error('图像过小，无法读取坐标。');
     const x = block % (width / 8) * 8;
@@ -355,11 +444,16 @@ function readHeader(image) {
       const pixel = ((y + (p >> 3)) * width + x + (p & 7)) * 4;
       coefficient += (0.299 * data[pixel] + 0.587 * data[pixel + 1] + 0.114 * data[pixel + 2]) * BASIS[frequency][p];
     }
-    votes[Math.floor(slot / HEADER_REPEATS)] += ((Math.round(coefficient / HEADER_STEP) % 2) + 2) % 2;
+    votes[Math.floor(slot / HEADER_REPEATS)] += ((Math.round(coefficient / bootstrapStep(blockCount, version)) % 2) + 2) % 2;
   }
   const bytes = new Uint8Array(HEADER_BYTES);
   for (let i = 0; i < votes.length; i += 1) if (votes[i] > HEADER_REPEATS / 2) bytes[i >> 3] |= 1 << (i & 7);
   return parseHeader(bytes, width, height);
+}
+
+function readHeader(image) {
+  try { return readHeaderVersion(image, VERSION); }
+  catch { return readHeaderVersion(image, 5); }
 }
 
 export async function encodeImage(source, preset, options = {}) {
@@ -367,7 +461,8 @@ export async function encodeImage(source, preset, options = {}) {
   const step = clamp(Math.round(options.step ?? 16), 4, 96);
   const flattened = flattenImage(source);
   const padded = padSource(flattened, plan);
-  const target = fitImage(preset, plan.outputWidth, plan.outputHeight, options.fit ?? 'contain');
+  const targetImage = fitImage(preset, plan.outputWidth, plan.outputHeight, options.fit ?? 'contain', plan.panels);
+  const target = flattenImage(targetImage);
   options.onProgress?.({ label: '按颜色与轮廓匹配细分块', fraction: 0 });
   await pause();
   const mapping = matchTiles(padded, target.data, plan);
@@ -381,7 +476,7 @@ export async function encodeImage(source, preset, options = {}) {
   const header = makeHeader(plan, step, crc32(payload));
   await watermark(output, plan, step, header, protectPayload(payload, plan), false, options.onProgress);
   const resemblance = presetSimilarity(output, target.data, plan.outputWidth, plan.outputHeight);
-  return { data: output, plan: { ...plan, step, fit: options.fit ?? 'contain', transparentPixels: flattened.transparentPixels }, resemblance };
+  return { data: output, targetImage, plan: { ...plan, step, fit: options.fit ?? 'contain', transparentPixels: flattened.transparentPixels }, resemblance };
 }
 
 export async function restoreImage(image, options = {}) {
@@ -425,8 +520,10 @@ export async function restoreImage(image, options = {}) {
     const destination = (y * plan.width + x) * 4;
     for (let c = 0; c < 3; c += 1) {
       let total = 0;
-      for (let dy = 0; dy < plan.scale; dy += 1) for (let dx = 0; dx < plan.scale; dx += 1) total += output[((y * plan.scale + dy) * plan.outputWidth + x * plan.scale + dx) * 4 + c];
-      cropped[destination + c] = total / (plan.scale ** 2);
+      const left = Math.ceil(x * plan.pixelScale); const right = Math.ceil((x + 1) * plan.pixelScale);
+      const top = Math.ceil(y * plan.pixelScale); const bottom = Math.ceil((y + 1) * plan.pixelScale);
+      for (let sy = top; sy < bottom; sy += 1) for (let sx = left; sx < right; sx += 1) total += output[(sy * plan.outputWidth + sx) * 4 + c];
+      cropped[destination + c] = total / ((right - left) * (bottom - top));
     }
     cropped[destination + 3] = 255;
   }

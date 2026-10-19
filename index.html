@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#17211b">
+    <meta name="theme-color" content="#fff7c2">
     <title>Naiwa · 奶蛙图像实验室</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
@@ -19,7 +19,6 @@
     <nav class="tabs" aria-label="工作区">
       <button class="tab is-active" data-view="encode" type="button">混淆图像</button>
       <button class="tab" data-view="decode" type="button">还原图像</button>
-      <button class="tab" data-view="benchmark" type="button">压缩评测</button>
     </nav>
 
     <main class="page-shell">
@@ -27,7 +26,8 @@
         <div class="workspace-heading">
           <div>
             <p class="eyebrow">IMAGE TRANSFORM / 01</p>
-            <h1 id="encode-title">生成混淆图</h1>
+            <h1 id="encode-title">让图片换个模样</h1>
+            <p class="workspace-intro">选好原图和预设，生成后即可预览与下载。</p>
           </div>
           <span class="file-meta" id="source-meta">尚未选择图像</span>
         </div>
@@ -41,11 +41,15 @@
                 <span class="upload-plus" aria-hidden="true">+</span>
                 <span class="upload-copy"><strong id="source-file-name">选择一张图片</strong><small>或拖放到此处</small></span>
               </button>
+              <p class="field-hint sizing-summary" id="source-sizing-summary">小图自动放大，大图适度缩小；高级模式可调整。</p>
             </section>
 
             <section class="control-section">
-              <div class="section-heading"><span class="step-index">02</span><h2>伪装预设</h2></div>
-              <div class="preset-list" id="preset-list" role="radiogroup" aria-label="奶蛙预设图"></div>
+              <div class="section-heading"><span class="step-index">02</span><h2>伪装预设</h2><span class="selection-label" id="selected-preset-name">奶蛙</span></div>
+              <div class="preset-list" id="preset-list" role="radiogroup" aria-label="伪装预设图"></div>
+              <input id="custom-preset-file" class="visually-hidden" type="file" accept="image/*">
+              <button class="quiet-button wide-button" id="custom-preset-picker" type="button" disabled>＋ 上传自定义预设</button>
+              <p class="field-hint" id="custom-preset-hint">自定义预设会自动保存在此浏览器，下次直接选择。</p>
             </section>
 
             <section class="control-section basic-settings">
@@ -55,36 +59,53 @@
               <div class="range-labels"><span>文件更小</span><span>画面更细腻</span></div>
               <div class="output-size-line" aria-live="polite" aria-atomic="true"><span>下载文件大小</span><strong id="output-size">生成后显示</strong></div>
               <p class="field-hint" id="jpg-quality-hint">生成后可继续调节，实时显示 JPG 的实际大小。</p>
-              <div class="field-line spaced-label"><label class="field-label" for="balance">还原偏好</label><output id="balance-value" for="balance">均衡</output></div>
+              <div class="field-line spaced-label"><label class="field-label" for="balance">画面取向</label><output id="balance-value" for="balance">均衡</output></div>
               <input id="balance" type="range" min="0" max="100" step="1" value="50" aria-describedby="balance-hint">
-              <div class="range-labels"><span>还原画质优先</span><span>抗压鲁棒优先</span></div>
-              <p class="field-hint" id="balance-hint">自动搭配处理参数；生成后调整会自动更新结果。</p>
+              <div class="range-labels preference-labels"><span>还原之后画质优先</span><span>混淆图与预设图的相似度高</span></div>
+              <p class="field-hint" id="balance-hint">左侧保留更多原图块内细节；向右会逐级加强预设适配，同时提高水印强度。</p>
+              <div class="field-line spaced-label"><label class="field-label" for="tile-size">分块与载体大小</label><output id="tile-size-value" for="tile-size">8 px</output></div>
+              <input id="tile-size" type="range" min="2" max="16" step="1" value="8" aria-describedby="tile-size-hint">
+              <div class="range-labels"><span>更细</span><span>更大</span></div>
+              <p class="field-hint" id="tile-size-hint">分块越细，自动配套的载体倍率越高，输出尺寸也越大。</p>
             </section>
 
+            <div class="generate-actions">
+              <button class="primary-button" id="encode-button" type="button" disabled>生成混淆图</button>
+              <p class="field-hint" id="generation-hint">默认参数即可开始，生成后仍可调整质量。</p>
+            </div>
+
             <details class="advanced-settings" id="advanced-settings">
-              <summary>高级模式<span>参数与评测数据</span></summary>
+              <summary>高级模式<span id="advanced-mode-label">尺寸、参数与数据</span></summary>
               <div class="advanced-content">
-              <p class="field-hint">默认自动选择参数。开启手动调整后使用下方设置。</p>
-              <label class="checkbox-label"><input id="manual-parameters" type="checkbox">手动调整算法参数</label>
+              <label class="checkbox-label"><input id="auto-resize" type="checkbox" checked>自动调整处理尺寸</label>
+              <div class="field-line"><label class="field-label" for="source-scale">原图缩放比例</label><output id="source-scale-value" for="source-scale">自动</output></div>
+              <input id="source-scale" class="text-input" type="number" min="1" max="1600" step="0.1" value="100" disabled>
+              <p class="field-hint" id="source-size-hint">自动目标：短边至少 1024、长边至多 2960 px。极端长图优先限制长边。还原得到处理尺寸。</p>
+              <p class="field-hint advanced-explainer">载体倍率决定混淆图相对处理原图的放大倍数。自动配对会按分块大小选倍率，细分块需要更大的载体空间。</p>
+              <label class="checkbox-label"><input id="auto-carrier" type="checkbox" checked>按分块大小自动匹配载体倍率</label>
+              <label class="field-label" for="carrier-scale">输出载体倍率</label>
+              <select id="carrier-scale" class="text-input">
+                <option value="1">1 倍</option><option value="1.5">1.5 倍</option><option value="2" selected>2 倍</option><option value="2.5">2.5 倍</option><option value="3">3 倍</option><option value="3.5">3.5 倍</option><option value="4">4 倍</option><option value="4.5">4.5 倍</option><option value="5">5 倍</option><option value="5.5">5.5 倍</option><option value="6">6 倍</option><option value="6.5">6.5 倍</option><option value="7">7 倍</option><option value="7.5">7.5 倍</option><option value="8">8 倍</option>
+              </select>
+              <p class="field-hint" id="carrier-scale-hint">自动配对可避开载体空间不足的组合。关闭后可手选 1–8 倍；细分块搭配低倍率时可能无法容纳坐标。</p>
+              <label class="checkbox-label spaced-label"><input id="manual-parameters" type="checkbox">手动调整其他算法参数</label>
+              <p class="field-hint">仅需调整细节保留、水印强度或预设适配时再开启；普通使用由画面取向自动决定。</p>
               <fieldset id="manual-fields" disabled>
-              <label class="field-label" for="tile-size">原图分块边长</label>
-              <select id="tile-size" class="text-input"><option value="8">8 × 8 px · 细分块</option><option value="16">16 × 16 px</option><option value="32">32 × 32 px · 对照</option></select>
-              <label class="field-label spaced-label" for="carrier-scale">输出载体倍率</label>
-              <select id="carrier-scale" class="text-input"><option value="1">1 倍 · 原始尺寸</option><option value="2" selected>2 倍 · 更多坐标容量</option><option value="3">3 倍</option></select>
-              <p class="field-hint">放大后仍按原图 8 px 分块，还原回原始尺寸；体积评测包含放大的代价。</p>
               <label class="field-label spaced-label" for="color-adapt">块级颜色适配</label>
               <select id="color-adapt" class="text-input"><option value="yes">启用 · 记录并还原块均色</option><option value="no">关闭 · 只重排</option></select>
+              <p class="field-hint">启用后会记录每块的平均颜色，还原时据此修正颜色；关闭后只恢复分块位置。</p>
               <label class="field-label spaced-label" for="color-gain">块内细节保留</label>
-              <select id="color-gain" class="text-input"><option value="1">100% · 原块对比度</option><option value="0.75" selected>75% · 兼顾预设与还原</option><option value="0.5">50% · 预设优先</option></select>
+               <select id="color-gain" class="text-input"><option value="1">100% · 原块对比度</option><option value="0.75" selected>75% · 兼顾预设与还原</option><option value="0.5">50% · 预设优先</option><option value="0.25">25% · 强预设适配</option></select>
+              <p class="field-hint">数值越高越保留原图块内明暗与纹理；数值越低，整体颜色越容易贴近预设。</p>
               <label class="field-label spaced-label" for="preset-fit">预设尺寸适配</label>
-              <select id="preset-fit" class="text-input"><option value="contain">完整显示 · 留白</option><option value="cover">铺满 · 居中裁切</option><option value="stretch">拉伸铺满</option></select>
+              <select id="preset-fit" class="text-input"><option value="contain">完整显示 · 透明填充</option><option value="cover">铺满 · 居中裁切</option><option value="stretch">拉伸铺满</option></select>
+              <p class="field-hint">完整显示不裁图；铺满会裁掉边缘；拉伸会改变预设比例。</p>
+              <p class="field-hint">长宽比超过 3:1 时沿长边分段处理，还原时自动拼接。JPG 将透明背景合成为白色。</p>
               <div class="field-line spaced-label"><label class="field-label" for="strength">水印强度</label><output id="strength-value" for="strength">16</output></div>
               <input id="strength" type="range" min="4" max="40" step="2" value="16">
               <div class="range-labels"><span>画质优先</span><span>鲁棒优先</span></div>
+              <p class="field-hint">水印用于在 JPG 中保存分块坐标；强度越高越耐压缩，但混淆图上的纹理也更明显。</p>
               </fieldset>
-              <label class="field-label spaced-label" for="preset-threshold">评测筛选相似度下限</label>
-              <input id="preset-threshold" class="text-input" type="number" min="0" max="1" step="0.05" value="0.50">
-              <p class="field-hint">仅用于压缩评测中的候选筛选，不影响下载。外观可直接通过预览判断。</p>
               <div class="advanced-stats" aria-live="polite">
                 <p id="applied-options">生成后显示实际采用的参数</p>
                 <p id="preset-score">生成后显示预设轮廓与细节 SSIM</p>
@@ -94,47 +115,56 @@
               </div>
             </details>
 
-            <button class="primary-button" id="encode-button" type="button" disabled>生成混淆图</button>
-            <p class="privacy-note">图像仅在此设备处理。透明像素统一合成到白底，恢复的是白底可见图，不保留透明通道。坐标水印及有损压缩会改变像素。</p>
+            <p class="privacy-note">图片只在此设备处理。还原得到处理尺寸的白底图像；JPG 压缩和坐标信息会带来像素误差。</p>
           </aside>
 
-          <section class="preview-area" aria-label="图像预览">
+        </div>
+
+        <section class="preview-area" id="preview-area" aria-label="图像预览" hidden>
             <div class="preview-toolbar">
               <div class="segmented" role="group" aria-label="预览内容">
                 <button class="preview-choice is-active" data-preview="compare" type="button">对照</button>
                 <button class="preview-choice" data-preview="mosaic" type="button">混淆图</button>
                 <button class="preview-choice" data-preview="restored" type="button">还原结果</button>
               </div>
-              <button class="quiet-button" id="download-button" type="button" disabled>下载 JPG</button>
+              <div class="preview-tools">
+                <div class="zoom-controls" role="group" aria-label="预览缩放">
+                  <button class="zoom-button" id="zoom-out" data-zoom="out" type="button" title="缩小预览" aria-label="缩小预览">−</button>
+                  <button class="zoom-button zoom-fit" id="zoom-fit" data-zoom="fit" type="button" title="适应预览区域">适应</button>
+                  <output id="zoom-value" aria-live="polite">适应</output>
+                  <button class="zoom-button" id="zoom-in" data-zoom="in" type="button" title="放大预览" aria-label="放大预览">+</button>
+                  <button class="zoom-button zoom-one" id="zoom-one" data-zoom="one" type="button" title="按原始像素显示">1:1</button>
+                </div>
+                <button class="primary-button download-action" id="download-button" type="button" disabled>下载 JPG</button>
+              </div>
             </div>
-            <div class="preview-grid" id="preview-grid">
+            <div class="preview-grid" id="preview-grid" data-mode="compare">
               <figure class="preview-panel" data-panel="source">
-                <figcaption><span>原图</span><span id="source-dimensions">等待上传</span></figcaption>
-                <div class="canvas-wrap"><canvas id="source-preview" aria-label="原始图像预览"></canvas><div class="empty-state" id="source-empty">选择图像后预览会显示在这里</div></div>
+                <figcaption><span>处理原图</span><span id="source-dimensions">等待上传</span></figcaption>
+                <div class="canvas-wrap"><div class="canvas-viewport"><div class="canvas-stage"><canvas id="source-preview" aria-label="原始图像预览"></canvas></div></div><div class="empty-state" id="source-empty"><strong>从一张图片开始</strong><span>在左侧选择或拖入原图</span></div></div>
               </figure>
               <figure class="preview-panel" data-panel="mosaic">
                 <figcaption><span>混淆图</span><span id="mosaic-dimensions">等待生成</span></figcaption>
-                <div class="canvas-wrap"><canvas id="mosaic-preview" aria-label="混淆图预览"></canvas><div class="empty-state" id="mosaic-empty">选择预设并生成</div></div>
+                <div class="canvas-wrap"><div class="canvas-viewport"><div class="canvas-stage"><canvas id="mosaic-preview" aria-label="混淆图预览"></canvas></div></div><div class="empty-state" id="mosaic-empty"><strong>这里是下载的画面</strong><span>选好预设后点击「生成混淆图」</span></div></div>
               </figure>
               <figure class="preview-panel advanced-preview" data-panel="target" hidden>
                 <figcaption><span>适配后的预设</span><span>与混淆图同尺寸</span></figcaption>
-                <div class="canvas-wrap"><canvas id="target-preview" aria-label="适配后的预设图"></canvas><div class="empty-state" id="target-empty">保留完整预设，透明区域使用白底</div></div>
+                <div class="canvas-wrap"><div class="canvas-viewport"><div class="canvas-stage"><canvas id="target-preview" aria-label="适配后的预设图"></canvas></div></div><div class="empty-state" id="target-empty">预设周围透明填充，长图自动分段</div></div>
               </figure>
               <figure class="preview-panel restored-panel" data-panel="restored">
                 <figcaption><span>JPG 还原预览</span><span id="restored-score">等待生成</span></figcaption>
-                <div class="canvas-wrap"><canvas id="restored-preview" aria-label="下载 JPG 的还原结果预览"></canvas><div class="empty-state" id="restored-empty">生成后显示最终 JPG 的还原效果</div></div>
+                <div class="canvas-wrap"><div class="canvas-viewport"><div class="canvas-stage"><canvas id="restored-preview" aria-label="下载 JPG 的还原结果预览"></canvas></div></div><div class="empty-state" id="restored-empty">生成后显示最终 JPG 的还原效果</div></div>
               </figure>
             </div>
-            <div class="result-strip" id="result-strip" aria-live="polite">
+            <div class="result-strip" id="result-strip" data-status="pending" aria-live="polite">
               <span class="result-indicator"></span><span id="result-summary">等待处理</span>
             </div>
-          </section>
-        </div>
+        </section>
       </section>
 
       <section id="decode-view" class="view" aria-labelledby="decode-title" hidden>
         <div class="workspace-heading">
-          <div><p class="eyebrow">IMAGE TRANSFORM / 02</p><h1 id="decode-title">还原混淆图</h1></div>
+          <div><p class="eyebrow">IMAGE TRANSFORM / 02</p><h1 id="decode-title">找回原来的画面</h1><p class="workspace-intro">只需混淆图文件，分块、倍率和处理尺寸都会自动读取。</p></div>
           <span class="file-meta" id="encoded-meta">选择包含坐标信息的图像</span>
         </div>
         <div class="decode-layout">
@@ -144,7 +174,7 @@
               <input id="encoded-file" class="visually-hidden" type="file" accept="image/*">
               <button class="upload-zone" id="encoded-picker" type="button">
                 <span class="upload-plus" aria-hidden="true">+</span>
-                <span class="upload-copy"><strong id="encoded-file-name">选择混淆图</strong><small>PNG、JPEG、WebP</small></span>
+                <span class="upload-copy"><strong id="encoded-file-name">选择混淆图</strong><small>选择或拖入之前下载的文件</small></span>
               </button>
             </section>
             <button class="primary-button" id="decode-button" type="button" disabled>还原图像</button>
@@ -152,43 +182,24 @@
             <p class="privacy-note">原始尺寸需保持不变。社交平台若缩放、裁切或重采样，坐标网格可能无法读取。</p>
           </aside>
           <section class="decode-preview">
+            <div class="decode-preview-toolbar">
+              <div class="zoom-controls" role="group" aria-label="还原预览缩放">
+                <button class="zoom-button" data-zoom="out" type="button" title="缩小预览" aria-label="缩小预览">−</button>
+                <button class="zoom-button zoom-fit" data-zoom="fit" type="button" title="适应预览区域">适应</button>
+                <output id="decode-zoom-value">适应</output>
+                <button class="zoom-button" data-zoom="in" type="button" title="放大预览" aria-label="放大预览">+</button>
+                <button class="zoom-button zoom-one" data-zoom="one" type="button" title="按原始像素显示">1:1</button>
+              </div>
+            </div>
             <figure class="preview-panel">
               <figcaption><span>还原结果</span><span id="decode-dimensions">等待解码</span></figcaption>
-              <div class="canvas-wrap decode-canvas-wrap"><canvas id="decode-preview" aria-label="还原图像预览"></canvas><div class="empty-state" id="decode-empty">选择混淆图文件</div></div>
+              <div class="canvas-wrap decode-canvas-wrap"><div class="canvas-viewport"><div class="canvas-stage"><canvas id="decode-preview" aria-label="还原图像预览"></canvas></div></div><div class="empty-state" id="decode-empty">选择混淆图文件</div></div>
               <div class="decode-message" id="decode-message" aria-live="polite">等待输入</div>
             </figure>
           </section>
         </div>
       </section>
 
-      <section id="benchmark-view" class="view" aria-labelledby="benchmark-title" hidden>
-        <div class="workspace-heading benchmark-heading">
-          <div><p class="eyebrow">JPEG ROBUSTNESS / 03</p><h1 id="benchmark-title">压缩权衡曲线</h1></div>
-          <span class="file-meta">每张测试图等权平均</span>
-        </div>
-        <div class="benchmark-controls">
-          <label class="benchmark-select"><span>测试图片</span><select id="test-count"><option value="1">1 张</option><option value="3" selected>3 张</option><option value="5">5 张</option><option value="10">10 张</option><option value="24">全部 24 张</option></select></label>
-          <label class="benchmark-select"><span>伪装预设</span><select id="benchmark-preset"></select></label>
-          <label class="benchmark-select"><span>参数组</span><select id="benchmark-mode"><option value="current">当前参数</option><option value="batch">批量 · 8 px / 2、3 倍 / 强度 8、16、24</option></select></label>
-          <button class="primary-button benchmark-button" id="benchmark-button" type="button">运行评测</button>
-          <button class="quiet-button" id="csv-button" type="button" disabled>导出 CSV</button>
-        </div>
-        <div class="benchmark-progress" id="benchmark-progress" aria-live="polite">默认使用自动参数；手动参数与评测筛选门槛可在高级模式中设置。整批完成后统一汇总。</div>
-        <section class="chart-panel">
-          <div class="chart-legend" id="chart-legend"><span>实心点：每张图相似度达标且全部恢复成功；空心点：未达标</span></div>
-          <canvas id="benchmark-chart" role="img" aria-label="还原与直接压缩的 SSIM 对比曲线"></canvas>
-        </section>
-        <section class="chart-panel"><div class="chart-legend">混淆图与预设轮廓相似度 · 显示所有样本的最小值与门槛</div><canvas id="preset-chart" role="img" aria-label="压缩体积与预设相似度曲线"></canvas></section>
-        <p class="similarity-readout" id="benchmark-selection">待筛选三指标 Pareto 候选</p>
-        <div class="results-table-wrap">
-          <table class="results-table">
-            <thead><tr><th>参数组</th><th>JPEG 质量</th><th>混淆图体积</th><th>还原 SSIM</th><th>预设轮廓 / 最低</th><th>预设细节</th><th>坐标读取</th><th>原图体积</th><th>原图 SSIM</th><th>筛选</th></tr></thead>
-            <tbody id="benchmark-results"><tr><td colspan="10" class="table-empty">运行评测后显示平均结果</td></tr></tbody>
-          </table>
-        </div>
-        <p class="benchmark-footnote">面积平均后按 8×8 局部窗口估算 SSIM：恢复图比较最长边 512 px 的亮度，预设轮廓比较 64 px 的 RGB，预设细节比较 512 px 的 RGB。相似度门槛逐图检查，恢复失败计 0 分；体积包含完整输出，以原文件字节数为基准。透明图与 JPEG 基线均使用白底。仅当前样本达标不能保证其他图片；缩放、裁切会破坏坐标。</p>
-        <p class="benchmark-footnote"><a href="./reports/compare.html" target="_blank" rel="noopener">查看已保存的原始分辨率批次，交互调整门槛并比较全部候选</a> · <a href="./reports/index.html" target="_blank" rel="noopener">历次曲线、CSV 与实际对照图</a></p>
-      </section>
     </main>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

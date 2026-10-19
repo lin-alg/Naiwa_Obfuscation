@@ -11,14 +11,17 @@ export function run(command, args, input) {
     child.stdout.on('data', (chunk) => stdout.push(chunk));
     child.stderr.on('data', (chunk) => stderr.push(chunk));
     child.on('error', reject);
-    child.stdin.on('error', (error) => { if (error.code !== 'EPIPE') reject(error); });
+    // FFmpeg can close its input immediately after reading the requested frame.
+    // Decide success from its exit status, including Windows' equivalent EOF.
+    child.stdin.on('error', (error) => { if (!['EPIPE', 'EOF'].includes(error.code)) reject(error); });
     child.on('close', (code) => code ? reject(new Error(Buffer.concat(stderr).toString())) : resolve(Buffer.concat(stdout)));
     child.stdin.end(input);
   });
 }
 
 export async function decode(input, width, height, filter) {
-  const bytes = await run('ffmpeg', ['-v', 'error', '-threads', '1', '-i', typeof input === 'string' ? input : 'pipe:0',
+  const jpegInput = typeof input !== 'string' && input[0] === 0xff && input[1] === 0xd8;
+  const bytes = await run('ffmpeg', ['-v', 'error', '-threads', '1', ...(jpegInput ? ['-f', 'mjpeg'] : []), '-i', typeof input === 'string' ? input : 'pipe:0',
     ...(filter ? ['-vf', filter] : []), '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'], typeof input === 'string' ? undefined : input);
   return { width, height, data: new Uint8ClampedArray(bytes.buffer, bytes.byteOffset, bytes.byteLength) };
 }

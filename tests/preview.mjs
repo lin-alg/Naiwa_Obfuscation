@@ -6,7 +6,7 @@ import { decode, jpeg, png } from './image-io.mjs';
 
 const option = (name, fallback) => process.argv.find((value) => value.startsWith(`--${name}=`))?.slice(name.length + 3) ?? fallback;
 const options = { tileSize: 8, scale: Number(option('scale', '2')), step: Number(option('step', '16')), colorGain: Number(option('gain', '0.5')), fit: 'contain' };
-const source = await decode(fileURLToPath(new URL('../test/static/Funny Background Image Wallpaper.jpg', import.meta.url)), 1920, 1200);
+const source = await decode(fileURLToPath(new URL('../test/static/1.jpg', import.meta.url)), 1920, 1080, 'scale=1920:1080:flags=area');
 const preset = await decode(fileURLToPath(new URL('../images/static/奶蛙.png', import.meta.url)), 512, 512);
 const encoded = await encodeImage(source, preset, options);
 const image = { width: encoded.plan.outputWidth, height: encoded.plan.outputHeight, data: encoded.data };
