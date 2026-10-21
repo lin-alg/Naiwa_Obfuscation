@@ -36,11 +36,14 @@
           <aside class="controls">
             <section class="control-section">
               <div class="section-heading"><span class="step-index">01</span><h2>原始图像</h2></div>
-              <input id="source-file" class="visually-hidden" type="file" accept="image/*">
+              <input id="source-file" class="visually-hidden" type="file" accept="image/*" multiple>
               <button class="upload-zone" id="source-picker" type="button">
                 <span class="upload-plus" aria-hidden="true">+</span>
-                <span class="upload-copy"><strong id="source-file-name">选择一张图片</strong><small>或拖放到此处</small></span>
+                <span class="upload-copy"><strong id="source-file-name">选择图片</strong><small>支持多选，或拖放到此处</small></span>
               </button>
+              <div class="batch-list" id="source-list" role="list" aria-label="原始图像条目"></div>
+              <label class="checkbox-label batch-unify"><input id="unify-settings" type="checkbox" checked>是否统一所有条目的设置</label>
+              <p class="field-hint batch-settings-hint" id="batch-settings-hint">调节设置会应用到所有条目。</p>
               <p class="field-hint sizing-summary" id="source-sizing-summary">小图自动放大，大图适度缩小；高级模式可调整。</p>
             </section>
 
@@ -71,6 +74,8 @@
 
             <div class="generate-actions">
               <button class="primary-button" id="encode-button" type="button" disabled>生成混淆图</button>
+              <button class="quiet-button wide-button" id="download-all-encoded" type="button" disabled hidden>下载全部 JPG（ZIP）</button>
+              <p class="field-hint batch-summary" id="encode-batch-summary" role="status"></p>
               <p class="field-hint" id="generation-hint">默认参数即可开始，生成后仍可调整质量。</p>
             </div>
 
@@ -171,14 +176,17 @@
           <aside class="controls decode-controls">
             <section class="control-section">
               <div class="section-heading"><span class="step-index">01</span><h2>混淆图文件</h2></div>
-              <input id="encoded-file" class="visually-hidden" type="file" accept="image/*">
+              <input id="encoded-file" class="visually-hidden" type="file" accept="image/*" multiple>
               <button class="upload-zone" id="encoded-picker" type="button">
                 <span class="upload-plus" aria-hidden="true">+</span>
-                <span class="upload-copy"><strong id="encoded-file-name">选择混淆图</strong><small>选择或拖入之前下载的文件</small></span>
+                <span class="upload-copy"><strong id="encoded-file-name">选择混淆图</strong><small>可多选或拖入之前下载的文件</small></span>
               </button>
+              <div class="batch-list" id="decode-list" role="list" aria-label="还原图像条目"></div>
             </section>
             <button class="primary-button" id="decode-button" type="button" disabled>还原图像</button>
             <button class="quiet-button wide-button" id="download-restored" type="button" disabled>下载还原 PNG</button>
+            <button class="quiet-button wide-button" id="download-all-restored" type="button" disabled hidden>下载全部还原 PNG（ZIP）</button>
+            <p class="field-hint batch-summary" id="decode-batch-summary" role="status"></p>
             <p class="privacy-note">原始尺寸需保持不变。社交平台若缩放、裁切或重采样，坐标网格可能无法读取。</p>
           </aside>
           <section class="decode-preview">

@@ -16,6 +16,8 @@ const div = (a, b) => {
   return a ? EXP[(LOG[a] - LOG[b] + 255) % 255] : 0;
 };
 const generators = new Map();
+// Multiplication by a fixed field element is a byte lookup in hot RS loops.
+const PRODUCTS = Array.from({ length: 256 }, (_, a) => Uint8Array.from({ length: 256 }, (_, b) => mul(a, b)));
 
 function generator(parity) {
   if (generators.has(parity)) return generators.get(parity);
@@ -40,18 +42,22 @@ export function encodeRS(data, parity = 96) {
   for (let i = 0; i < data.length; i += 1) {
     const coefficient = result[i];
     if (!coefficient) continue;
-    for (let j = 1; j < polynomial.length; j += 1) result[i + j] ^= mul(polynomial[j], coefficient);
+    const products = PRODUCTS[coefficient];
+    for (let j = 1; j < polynomial.length; j += 1) result[i + j] ^= products[polynomial[j]];
   }
   result.set(data);
   return result;
 }
 
 function syndromes(bytes, parity) {
-  return Uint8Array.from({ length: parity }, (_, power) => {
+  const result = new Uint8Array(parity);
+  for (let power = 0; power < parity; power += 1) {
     let value = 0;
-    for (const byte of bytes) value = mul(value, EXP[power]) ^ byte;
-    return value;
-  });
+    const products = PRODUCTS[EXP[power]];
+    for (let i = 0; i < bytes.length; i += 1) value = products[value] ^ bytes[i];
+    result[power] = value;
+  }
+  return result;
 }
 
 export function decodeRS(bytes, parity = 96) {
@@ -119,11 +125,15 @@ export function decodeRS(bytes, parity = 96) {
   return { data: result.slice(0, -parity), corrected: degree };
 }
 
+const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, value) => {
+  for (let bit = 0; bit < 8; bit += 1) value = (value >>> 1) ^ ((value & 1) ? 0xedb88320 : 0);
+  return value >>> 0;
+});
+
 export function crc32(bytes) {
   let crc = 0xffffffff;
   for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+    crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ byte) & 255];
   }
   return (crc ^ 0xffffffff) >>> 0;
 }

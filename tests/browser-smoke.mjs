@@ -106,11 +106,14 @@ async function waitFor(expression, timeoutMs = 120000) {
   throw new Error(`Timed out waiting for: ${expression}; ${JSON.stringify(diagnostic)}`);
 }
 
-async function setInputFile(selector, path) {
+async function setInputFile(selector, path, append = false) {
+  if (!append && ['#source-file', '#encoded-file'].includes(selector)) {
+    await evaluate(`document.querySelectorAll('${selector === '#source-file' ? '#source-list' : '#decode-list'} .batch-remove').forEach(button=>button.click())`);
+  }
   const { root } = await command('DOM.getDocument', { depth: -1 });
   const { nodeId } = await command('DOM.querySelector', { nodeId: root.nodeId, selector });
   if (!nodeId) throw new Error(`Input not found: ${selector}`);
-  await command('DOM.setFileInputFiles', { files: [path], nodeId });
+  await command('DOM.setFileInputFiles', { files: Array.isArray(path) ? path : [path], nodeId });
 }
 
 async function screenshot(filename) {
@@ -219,13 +222,13 @@ try {
   const downloadStart = Date.now();
   while (!finishedDownloads.length && Date.now() - downloadStart < 20000) await new Promise((resolve) => setTimeout(resolve, 100));
   if (!finishedDownloads.length) throw new Error('JPG download did not complete');
-  const jpgPath = join(downloads, 'naiwa-obfuscated-q65.jpg');
+  const jpgPath = join(downloads, 'test-photo-obfuscated-q65.jpg');
   const jpegBytes = await readFile(jpgPath);
   if (jpegBytes[0] !== 0xff || jpegBytes[1] !== 0xd8 || (await stat(jpgPath)).size !== adjustedBytes) throw new Error('Downloaded JPG does not match displayed byte count');
   const pngSize = await evaluate(`new Promise(resolve=>document.querySelector('#mosaic-preview').toBlob(blob=>resolve(blob.size),'image/png'))`);
   console.log(`JPG actual download: Q75 ${initialBytes} bytes => Q65 ${adjustedBytes} bytes; preview PNG ${pngSize} bytes; path=${jpgPath}`);
   await setInputFile('#encoded-file', jpgPath);
-  await waitFor('document.querySelector("#encoded-meta").textContent.includes("naiwa-obfuscated-q65.jpg")');
+  await waitFor('document.querySelector("#encoded-meta").textContent.includes("test-photo-obfuscated-q65.jpg")');
   await evaluate('document.querySelector("#decode-button").click()');
   const restoredMessage = await waitFor('document.querySelector("#decode-message").textContent.includes("坐标验证通过")');
   const restoredDimensions = await evaluate('({width: document.querySelector("#decode-preview").width, height: document.querySelector("#decode-preview").height})');
@@ -246,7 +249,7 @@ try {
   const pngDownloadStart = Date.now();
   while (finishedDownloads.length < 2 && Date.now() - pngDownloadStart < 20000) await new Promise((resolve) => setTimeout(resolve, 100));
   if (finishedDownloads.length < 2) throw new Error('Advanced PNG download did not complete');
-  const pngPath = join(downloads, 'naiwa-obfuscated.png');
+  const pngPath = join(downloads, 'test-photo-obfuscated.png');
   const rawPngBytes = (await stat(pngPath)).size;
   if (!(rawPngBytes > adjustedBytes)) throw new Error('Expected compressed JPG to be smaller than the raw PNG');
   const pngUrl = '/' + relative(fileURLToPath(new URL('../', import.meta.url)), pngPath).split(sep).join('/');
@@ -332,7 +335,7 @@ try {
   const fineDownloadStart = Date.now();
   while (finishedDownloads.length < 3 && Date.now() - fineDownloadStart < 20000) await new Promise(resolve => setTimeout(resolve, 100));
   if (finishedDownloads.length < 3) throw new Error('Fine-tile JPG did not download');
-  const fineJpgPath = join(downloads, 'naiwa-obfuscated-q75.jpg');
+  const fineJpgPath = join(downloads, 'small-source-obfuscated-q75.jpg');
   await setInputFile('#encoded-file', fineJpgPath);
   await waitFor('document.querySelector("#encoded-meta").textContent.includes("q75")');
   await evaluate('document.querySelector("#decode-button").click()');
@@ -347,7 +350,7 @@ try {
   const scale4DownloadStart = Date.now();
   while (finishedDownloads.length < 4 && Date.now() - scale4DownloadStart < 20000) await new Promise(resolve => setTimeout(resolve, 100));
   if (finishedDownloads.length < 4) throw new Error('4x carrier JPG did not download');
-  await setInputFile('#encoded-file', join(downloads, 'naiwa-obfuscated-q80.jpg'));
+  await setInputFile('#encoded-file', join(downloads, 'small-source-obfuscated-q80.jpg'));
   await waitFor('document.querySelector("#encoded-meta").textContent.includes("q80")');
   await evaluate('document.querySelector("#decode-button").click()');
   await waitFor('document.querySelector("#decode-message").textContent.includes("坐标验证通过")');
@@ -368,6 +371,85 @@ try {
   await waitFor('document.querySelectorAll(".preset-option").length === 4 && !document.querySelector("#custom-preset-picker").disabled');
   if (await evaluate('document.querySelectorAll(".preset-remove").length')) throw new Error('Deleted preset returned after reload');
   console.log('permanent preset deletion passed after reload');
+
+  // Batch settings, worker cancellation, partial failure and archive downloads.
+  await evaluate(`document.querySelector('#auto-resize').checked=false;document.querySelector('#auto-resize').dispatchEvent(new Event('change'))`);
+  await setInputFile('#source-file', [inputFile, smallPath]);
+  await waitFor(`document.querySelectorAll('#source-list .batch-item').length===2 && [...document.querySelectorAll('#source-list .batch-item')].every(row=>row.dataset.status==='idle')`);
+  if (!await evaluate(`document.querySelector('#unify-settings').checked`)) throw new Error('Batch settings must default to unified');
+  await evaluate(`document.querySelector('#jpg-quality').value=85;document.querySelector('#jpg-quality').dispatchEvent(new Event('input'));document.querySelectorAll('#source-list .batch-select')[1].click()`);
+  if (!await evaluate(`document.querySelector('#jpg-quality').value==='85'`)) throw new Error('Unified quality did not reach every entry');
+  await evaluate(`document.querySelector('.preset-option[data-index="1"]').click();document.querySelectorAll('#source-list .batch-select')[0].click()`);
+  if (!await evaluate(`document.querySelector('.preset-option[data-index="1"]').getAttribute('aria-checked')==='true'`)) throw new Error('Unified preset did not reach every entry');
+  await evaluate(`document.querySelector('#unify-settings').checked=false;document.querySelector('#unify-settings').dispatchEvent(new Event('change'));document.querySelectorAll('#source-list .batch-select')[1].click();document.querySelector('#jpg-quality').value=80;document.querySelector('#jpg-quality').dispatchEvent(new Event('input'));document.querySelector('#tile-size').value=16;document.querySelector('#tile-size').dispatchEvent(new Event('input'));document.querySelector('.preset-option[data-index="2"]').click();document.querySelectorAll('#source-list .batch-select')[0].click()`);
+  if (!await evaluate(`document.querySelector('#jpg-quality').value==='85'&&document.querySelector('#tile-size').value==='8'&&document.querySelector('.preset-option[data-index="1"]').getAttribute('aria-checked')==='true'`)) throw new Error('Independent settings leaked into another entry');
+  await evaluate(`document.querySelector('#encode-button').click()`);
+  await waitFor(`document.querySelector('#source-list .batch-item[data-status="processing"] .progress-ring[aria-valuenow]')`);
+  await evaluate(`for(const value of [75,90]){document.querySelector('#jpg-quality').value=value;document.querySelector('#jpg-quality').dispatchEvent(new Event('input'))}`);
+  await waitFor(`document.querySelectorAll('#source-list .batch-item[data-status="done"]').length===2&&document.querySelector('#output-size').dataset.quality==='90'&&document.querySelector('#result-summary').textContent.includes('还原验证通过')`);
+  if (!await evaluate(`document.querySelector('#mosaic-preview').width===1280&&document.querySelector('#mosaic-preview').height===720`)) throw new Error('First batch entry has incorrect dimensions');
+  await evaluate(`document.querySelectorAll('#source-list .batch-select')[1].click()`);
+  await waitFor(`document.querySelector('#output-size').dataset.quality==='80'&&document.querySelector('#mosaic-preview').width===160&&document.querySelector('#result-summary').textContent.includes('还原验证通过')`);
+  if (!await evaluate(`document.querySelector('#tile-size').value==='16'&&document.querySelector('.preset-option[data-index="2"]').getAttribute('aria-checked')==='true'`)) throw new Error('Second batch entry lost its independent settings');
+  for (const width of [320,390,768]) {
+    await command('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: width < 500 });
+    if (!await evaluate(`document.documentElement.scrollWidth<=innerWidth`)) throw new Error(`Batch encode layout overflows at ${width}`);
+  }
+  await screenshot('naiwa-browser-batch-mobile.png');
+  await command('Emulation.clearDeviceMetricsOverride');
+  const beforeBatchDownloads = finishedDownloads.length;
+  await evaluate(`document.querySelectorAll('#source-list .batch-download').forEach(button=>button.click());document.querySelector('#download-all-encoded').click()`);
+  await waitFor(`!document.querySelector('#download-all-encoded').disabled`);
+  const batchDownloadStart = Date.now();
+  while (finishedDownloads.length < beforeBatchDownloads + 3 && Date.now() - batchDownloadStart < 20000) await new Promise(resolve => setTimeout(resolve, 100));
+  if (finishedDownloads.length < beforeBatchDownloads + 3) throw new Error('Batch JPG/ZIP downloads did not complete');
+  function inspectZip(bytes) {
+    let offset = 0; const files = [];
+    while (bytes.readUInt32LE(offset) === 0x04034b50) {
+      const size = bytes.readUInt32LE(offset + 18); const length = bytes.readUInt16LE(offset + 26); const extra = bytes.readUInt16LE(offset + 28);
+      const name = bytes.subarray(offset + 30, offset + 30 + length).toString('utf8'); const start = offset + 30 + length + extra;
+      files.push({ name, data: bytes.subarray(start, start + size) }); offset = start + size;
+    }
+    if (bytes.readUInt32LE(offset) !== 0x02014b50 || bytes.readUInt32LE(bytes.length - 22) !== 0x06054b50) throw new Error('ZIP directory is invalid');
+    return files;
+  }
+  const encodedArchive = inspectZip(await readFile(join(downloads, 'naiwa-obfuscated.zip')));
+  if (encodedArchive.length !== 2) throw new Error('Batch archive must contain two JPG files');
+  for (const item of encodedArchive) if (!item.data.equals(await readFile(join(downloads, item.name)))) throw new Error('ZIP content differs from per-entry JPG');
+  await setInputFile('#encoded-file', [join(downloads, 'test-photo-obfuscated-q90.jpg'), join(downloads, 'small-source-obfuscated-q80.jpg'), inputFile]);
+  await waitFor(`document.querySelectorAll('#decode-list .batch-item[data-status="idle"]').length===3`);
+  await evaluate(`document.querySelector('[data-view="decode"]').click();document.querySelector('#decode-button').click()`);
+  await waitFor(`document.querySelectorAll('#decode-list .batch-item[data-status="done"]').length===2&&document.querySelectorAll('#decode-list .batch-item[data-status="error"]').length===1`);
+  await evaluate(`document.querySelectorAll('#decode-list .batch-select')[0].click()`);
+  await waitFor(`document.querySelector('#decode-preview').width===640&&document.querySelector('#decode-preview').height===360&&document.querySelector('#decode-message').textContent.includes('坐标验证通过')`);
+  await evaluate(`document.querySelectorAll('#decode-list .batch-select')[1].click()`);
+  await waitFor(`document.querySelector('#decode-preview').width===160&&document.querySelector('#decode-preview').height===100&&document.querySelector('#decode-message').textContent.includes('坐标验证通过')`);
+  const beforeRestoreDownloads = finishedDownloads.length;
+  await evaluate(`document.querySelector('#download-restored').click();document.querySelector('#download-all-restored').click()`);
+  const restoreDownloadStart = Date.now();
+  while (finishedDownloads.length < beforeRestoreDownloads + 2 && Date.now() - restoreDownloadStart < 20000) await new Promise(resolve => setTimeout(resolve, 100));
+  const restoredArchive = inspectZip(await readFile(join(downloads, 'naiwa-restored.zip')));
+  if (restoredArchive.length !== 2 || restoredArchive.some(item => item.data.readUInt32BE(0) !== 0x89504e47)) throw new Error('Restored archive must contain only successful PNGs');
+  const independentPNG = await readFile(join(downloads, 'small-source-obfuscated-q80-restored.png'));
+  if (!restoredArchive.find(item => item.name === 'small-source-obfuscated-q80-restored.png')?.data.equals(independentPNG)) throw new Error('Restored ZIP does not match individual download');
+  for (const width of [320,390,768]) {
+    await command('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: width < 500 });
+    if (!await evaluate(`document.documentElement.scrollWidth<=innerWidth`)) throw new Error(`Batch restore layout overflows at ${width}`);
+  }
+  await screenshot('naiwa-browser-batch-restore-mobile.png');
+  await command('Emulation.clearDeviceMetricsOverride');
+  await evaluate(`document.querySelector('[data-view="encode"]').click();document.querySelector('#encode-button').click();document.querySelectorAll('#source-list .batch-remove')[1].click()`);
+  await waitFor(`document.querySelectorAll('#source-list .batch-item').length===1&&document.querySelector('#source-list .batch-item').dataset.status==='done'`);
+  await evaluate(`document.querySelector('#unify-settings').checked=true;document.querySelector('#unify-settings').dispatchEvent(new Event('change'))`);
+  await setInputFile('#source-file', smallPath, true);
+  await waitFor(`document.querySelectorAll('#source-list .batch-item[data-status="idle"]').length===1`);
+  await evaluate(`document.querySelectorAll('#source-list .batch-select')[1].click()`);
+  if (!await evaluate(`document.querySelector('#jpg-quality').value==='90'&&document.querySelector('#tile-size').value==='8'`)) throw new Error('New entry did not inherit unified settings');
+  await evaluate(`document.querySelectorAll('#source-list .batch-select')[0].click();document.querySelector('#jpg-quality').value=88;document.querySelector('#jpg-quality').dispatchEvent(new Event('input'));document.querySelectorAll('#source-list .batch-select')[1].click()`);
+  if (!await evaluate(`document.querySelector('#jpg-quality').value==='88'`)) throw new Error('Re-enabling unified settings did not synchronize the batch');
+  await evaluate(`document.querySelectorAll('#source-list .batch-remove').forEach(button=>button.click());document.querySelectorAll('#decode-list .batch-remove').forEach(button=>button.click())`);
+  if (!await evaluate(`document.querySelector('#encode-button').disabled&&document.querySelector('#decode-button').disabled&&document.querySelector('#preview-area').hidden`)) throw new Error('Removing the final batch entry did not reset the view');
+  console.log('batch passed: unified/independent presets and settings, cancellation, progress, previews, single downloads, JPG/PNG ZIPs, partial failure and 320/390/768px layouts');
 
   if (process.argv.includes('--reports')) {
     await command('Page.navigate', { url: 'http://127.0.0.1:4173/reports/compare.html' });

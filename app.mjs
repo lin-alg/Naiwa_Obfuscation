@@ -1,970 +1,518 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { createPlan } from './core.mjs';
-import { sourceSizing } from './image-sizing.mjs';
+import { carrierScale, processingSize, processingOptions } from './processing-settings.mjs';
 import { listPresets, savePreset, deletePreset, selectedPreset } from './preset-store.mjs';
+import { WorkerPool } from './worker-pool.mjs';
+import { initializePreviews } from './preview-controller.mjs';
+import { zipFiles } from './zip-store.mjs';
 
+const $ = selector => document.querySelector(selector);
 const PRESETS = [
   { name: '奶蛙', src: './images/static/%E5%A5%B6%E8%9B%99.png' },
   { name: '鼠蛙', src: './images/static/naishu.png' },
   { name: '蛙狗', src: './images/static/naigou.png' },
   { name: '蛙蛋', src: './images/static/naidan.png' },
 ];
-const state = {
-  presetIndex: 0,
-  presetKey: null,
-  presetBitmaps: [],
-  presetImages: [],
-  source: null,
-  original: null,
-  sourceRequest: 0,
-  encoded: null,
-  output: null,
-  encoding: false,
-  generationVersion: 0,
-  exportVersion: 0,
-  pendingGeneration: false,
-  recoveryBoost: false,
-  encodedFile: null,
-  restoredDownload: null,
-  preview: 'compare',
-  hasPreview: false,
-  activePreviewViewport: null,
-  zoomByViewport: new WeakMap(),
+const state = { encode: [], decode: [], activeEncode: null, activeDecode: null, presetIndex: 0, presetImages: [], presetsReady: false, encodePaint: 0, decodePaint: 0 };
+const pool = new WorkerPool();
+const previews = initializePreviews();
+const activeEntry = kind => state[kind].find(entry => entry.id === state[kind === 'encode' ? 'activeEncode' : 'activeDecode']);
+const presetKey = preset => preset.id ?? preset.src;
+const isReady = entry => entry?.result && ['done', 'warning'].includes(entry.status);
+const isProcessing = entry => ['queued', 'processing'].includes(entry.status);
+const fields = {
+  quality: ['jpg-quality', 'number'], balance: ['balance', 'number'], tileSize: ['tile-size', 'number'],
+  autoResize: ['auto-resize', 'checkbox'], sourceScale: ['source-scale', 'number'],
+  autoCarrier: ['auto-carrier', 'checkbox'], carrierScale: ['carrier-scale', 'number'],
+  manual: ['manual-parameters', 'checkbox'], colorAdapt: ['color-adapt', 'yes'],
+  colorGain: ['color-gain', 'number'], fit: ['preset-fit', 'string'], strength: ['strength', 'number'],
 };
 
-const $ = (selector) => document.querySelector(selector);
-const canvases = {
-  source: $('#source-preview'),
-  mosaic: $('#mosaic-preview'),
-  target: $('#target-preview'),
-  restored: $('#restored-preview'),
-  decode: $('#decode-preview'),
-};
-const workingCanvas = document.createElement('canvas');
-let generationTimer;
-let exportTimer;
-
-function setCanvas(canvas, pixels, width, height) {
-  canvas.width = width;
-  canvas.height = height;
-  canvas.getContext('2d', { willReadFrequently: true }).putImageData(new ImageData(pixels, width, height), 0, 0);
-  requestAnimationFrame(() => applyPreviewZoom(canvas.closest('.canvas-viewport')));
+function readSettings() {
+  const settings = { preset: presetKey(PRESETS[state.presetIndex]) };
+  for (const [key, [id, type]] of Object.entries(fields)) {
+    const input = $(`#${id}`);
+    settings[key] = type === 'checkbox' ? input.checked : type === 'yes' ? input.value === 'yes' : type === 'number' ? Number(input.value) : input.value;
+  }
+  return settings;
 }
 
-function canvasPixels(canvas) {
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  return context.getImageData(0, 0, canvas.width, canvas.height).data;
+function writeSettings(settings) {
+  for (const [key, [id, type]] of Object.entries(fields)) {
+    const input = $(`#${id}`);
+    if (type === 'checkbox') input.checked = settings[key];
+    else input.value = type === 'yes' ? settings[key] ? 'yes' : 'no' : String(settings[key]);
+  }
+  const index = PRESETS.findIndex(preset => presetKey(preset) === settings.preset);
+  setPreset(index < 0 ? 0 : index, false);
+  syncSettings();
 }
 
 function showToast(message, isError = false, action) {
-  const toast = $('#toast');
-  toast.textContent = message;
+  const toast = $('#toast'); toast.textContent = message;
   if (action) {
-    const button = document.createElement('button');
-    button.type = 'button'; button.className = 'toast-action'; button.textContent = action.label;
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'toast-action'; button.textContent = action.label;
     button.addEventListener('click', async () => {
       button.disabled = true; clearTimeout(showToast.timer);
-      try { await action.run(); toast.classList.remove('is-visible'); }
-      catch (error) { showToast(error.message, true); }
+      try { await action.run(); toast.classList.remove('is-visible'); } catch (error) { showToast(error.message, true); }
     });
     toast.append(button);
   }
-  toast.classList.toggle('is-error', isError);
-  toast.classList.add('is-visible');
-  clearTimeout(showToast.timer);
+  toast.classList.toggle('is-error', isError); toast.classList.add('is-visible'); clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => toast.classList.remove('is-visible'), action ? 8000 : 3800);
 }
 
-function setBusy(button, busy, label) {
-  button.disabled = busy;
-  button.classList.toggle('is-busy', busy);
-  if (busy) {
-    button.dataset.originalLabel = button.textContent;
-    button.innerHTML = `<span class="button-spinner" aria-hidden="true"></span>${label}`;
-  } else if (button.dataset.originalLabel) {
-    button.textContent = button.dataset.originalLabel;
-  }
+const formatBytes = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(2)} MB` : bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
+const stem = entry => entry.file.name.replace(/\.[^.]+$/, '') || 'image';
+function filename(entry, kind, raw = false) {
+  if (kind === 'decode') return `${stem(entry)}-restored.png`;
+  return raw ? `${stem(entry)}-obfuscated.png` : `${stem(entry)}-obfuscated-q${entry.result.quality}.jpg`;
 }
-
-function runWorker(action, payload, progress) {
-  return new Promise((resolve, reject) => {
-    const worker = new Worker('./engine-worker.mjs', { type: 'module' });
-    const id = crypto.randomUUID();
-    worker.onmessage = (event) => {
-      if (event.data.id !== id) return;
-      if (event.data.type === 'progress') {
-        progress?.(event.data.progress);
-      } else if (event.data.type === 'error') {
-        worker.terminate();
-        reject(new Error(event.data.message));
-      } else {
-        worker.terminate();
-        resolve(event.data.result);
-      }
-    };
-    worker.onerror = (event) => {
-      worker.terminate();
-      reject(new Error(event.message || '图像处理失败'));
-    };
-    const transfer = [];
-    for (const key of ['source', 'target', 'original']) {
-      if (ArrayBuffer.isView(payload[key]?.data)) transfer.push(payload[key].data.buffer);
-    }
-    worker.postMessage({ ...payload, id, action }, transfer);
-  });
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = name; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
-
-function loadBitmap(blob) {
-  return createImageBitmap(blob);
-}
-
-function bitmapToCanvas(bitmap) {
-  const canvas = document.createElement('canvas');
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-  canvas.getContext('2d', { willReadFrequently: true }).drawImage(bitmap, 0, 0);
+const imageBlob = canvas => new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('浏览器无法导出图像。'))));
+function bitmapCanvas(bitmap, width = bitmap.width, height = bitmap.height) {
+  const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true }); context.imageSmoothingQuality = 'high'; context.drawImage(bitmap, 0, 0, width, height);
   return canvas;
 }
+const canvasPixels = canvas => canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, canvas.width, canvas.height).data;
 
-function presetPixels(index) {
-  const image = state.presetImages[index];
-  return { ...image, data: image.data.slice() };
-}
-
-function carrierScaleForTile(tileSize) {
-  return Math.max(1, Math.min(8, Math.round((16 / tileSize) * 2) / 2));
-}
-
-function currentCarrierScale() {
-  return $('#auto-carrier').checked
-    ? carrierScaleForTile(Number($('#tile-size').value))
-    : Number($('#carrier-scale').value);
-}
-
-function syncCarrierControls() {
-  const automatic = $('#auto-carrier').checked;
-  const tileSize = Number($('#tile-size').value);
-  const scale = carrierScaleForTile(tileSize);
-  if (automatic) $('#carrier-scale').value = String(scale);
-  $('#carrier-scale').disabled = automatic;
-  $('#tile-size-hint').textContent = automatic
-    ? `${tileSize} px 分块 · 自动匹配 ${scale} 倍载体；分块越细，倍率越高、输出也越大。`
-    : `${tileSize} px 分块 · 手动使用 ${Number($('#carrier-scale').value)} 倍载体；分块越细，预设轮廓越细。`;
-  $('#tile-size-value').value = `${tileSize} px · ${scale}×`;
-  $('#carrier-scale-hint').textContent = automatic
-    ? `当前 ${tileSize} px 分块自动配 ${scale} 倍载体。分块越细，载体越大；高倍率会增加输出尺寸。`
-    : '自动配对已关闭，可手动选择 1–8 倍。细分块搭配低倍率可能无法容纳坐标；高倍率会增加输出尺寸并可能缩小处理原图。';
-}
-
-function automaticOptions(quality = Number($('#jpg-quality').value), balance = Number($('#balance').value), recoveryBoost = state.recoveryBoost) {
-  const preference = Math.max(0, Math.min(100, balance)) / 100;
-  const preferenceStep = 16 + Math.max(0, preference - 0.5) * 8;
-  const compressionStep = quality < 60 ? 28 : quality < 65 ? 24 : 12;
-  const colorGain = preference < 0.4 ? 1 : preference < 0.65 ? 0.75 : preference < 0.875 ? 0.5 : 0.25;
-  return {
-    tileSize: Number($('#tile-size').value),
-    scale: currentCarrierScale(),
-    step: Math.round(Math.max(preferenceStep, compressionStep, recoveryBoost ? 24 : 0) / 2) * 2,
-    fit: 'contain', colorAdapt: true,
-    colorGain,
-  };
-}
-
-function currentOptions() {
-  const options = automaticOptions();
-  if (!$('#manual-parameters').checked) return options;
-  return { ...options, step: Number($('#strength').value), fit: $('#preset-fit').value, colorAdapt: $('#color-adapt').value === 'yes', colorGain: Number($('#color-gain').value) };
-}
-
-function formatBytes(bytes) {
-  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(2)} MB`;
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${bytes} B`;
-}
-
-function invalidateOutput() {
-  state.exportVersion += 1;
-  clearTimeout(exportTimer);
-  state.output = null;
-  $('#download-button').disabled = true;
-  $('#download-button').removeAttribute('data-bytes');
-  $('#output-size').removeAttribute('data-bytes');
-  $('#output-size').removeAttribute('data-quality');
-  $('#output-size').textContent = state.source ? '正在计算…' : '生成后显示';
-  $('#result-strip').classList.remove('is-ready');
-  $('#result-strip').dataset.status = 'pending';
-  syncWorkflow();
-}
-
-function syncWorkflow() {
-  if (!$('#encode-button').classList.contains('is-busy')) $('#encode-button').textContent = state.encoded ? '重新生成混淆图' : '生成混淆图';
+async function paintBlob(canvas, blob, width, height, current) {
+  if (blob.type === 'application/x-naiwa-rgba') {
+    const pixels = new Uint8ClampedArray(await blob.arrayBuffer());
+    if (!current()) return;
+    canvas.width = width; canvas.height = height;
+    canvas.getContext('2d', { willReadFrequently: true }).putImageData(new ImageData(pixels, width, height), 0, 0);
+    requestAnimationFrame(() => previews.apply(canvas.closest('.canvas-viewport'))); return;
+  }
+  const bitmap = await createImageBitmap(blob);
+  if (!current()) { bitmap.close(); return; }
+  canvas.width = width; canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true }); context.imageSmoothingQuality = 'high'; context.drawImage(bitmap, 0, 0, width, height); bitmap.close();
+  requestAnimationFrame(() => previews.apply(canvas.closest('.canvas-viewport')));
 }
 
 function syncDesktopLayout() {
-  const showPreview = state.hasPreview && $('#encode-view').classList.contains('is-visible');
-  document.body.classList.toggle('has-preview', showPreview);
-  document.documentElement.classList.toggle('has-preview', showPreview);
+  const shown = !$('#preview-area').hidden && $('#encode-view').classList.contains('is-visible');
+  document.body.classList.toggle('has-preview', shown); document.documentElement.classList.toggle('has-preview', shown);
 }
 
-function requestGeneration(delay = 300) {
-  if (!state.source) return;
-  state.generationVersion += 1;
-  state.pendingGeneration = true;
-  invalidateOutput();
-  $('#download-png').disabled = true;
-  $('#result-summary').textContent = '设置已更新，正在重新生成…';
-  clearTimeout(generationTimer);
-  if (!state.encoding) generationTimer = setTimeout(encodeCurrentImage, delay);
+function syncSettings() {
+  const settings = readSettings(); const scale = carrierScale(settings);
+  if (settings.autoCarrier) $('#carrier-scale').value = String(scale);
+  $('#carrier-scale').disabled = settings.autoCarrier; $('#source-scale').disabled = settings.autoResize;
+  $('#tile-size-value').value = `${settings.tileSize} px · ${scale}×`;
+  $('#tile-size-hint').textContent = `${settings.tileSize} px 分块 · ${settings.autoCarrier ? '自动匹配' : '手动使用'} ${scale} 倍载体；分块越细，倍率越高、输出也越大。`;
+  $('#carrier-scale-hint').textContent = settings.autoCarrier ? `当前 ${settings.tileSize} px 分块自动配 ${scale} 倍载体。高倍率会增加输出尺寸。` : '可手动选择 1–8 倍；细分块搭配低倍率可能无法容纳坐标。';
+  $('#jpg-quality-value').value = `${settings.quality}%`; $('#strength-value').value = String(settings.strength);
+  $('#balance-value').value = settings.balance < 34 ? '还原画质优先' : settings.balance > 66 ? '预设相似度优先' : '均衡';
+  $('#manual-fields').disabled = !settings.manual; $('#balance').disabled = settings.manual;
+  $('#advanced-mode-label').textContent = settings.manual ? '手动算法参数' : '尺寸与自动配对';
+  $('#balance-hint').textContent = settings.manual ? '手动算法参数已接管细节保留和水印强度。' : '左侧保留更多原图细节；向右会逐级加强预设适配，同时提高水印强度。';
+  $('.advanced-preview').hidden = !$('#advanced-settings').open;
+  $('#preview-grid').classList.toggle('has-target', $('#advanced-settings').open);
+  $('#batch-settings-hint').textContent = $('#unify-settings').checked ? '调节设置会应用到所有条目。' : '仅调整当前选中条目，其他条目保留各自设置。';
 }
 
-function requestJpegUpdate() {
-  invalidateOutput();
-  if (state.encoding || state.pendingGeneration || !state.encoded) return;
-  $('#restored-score').textContent = '正在更新';
-  exportTimer = setTimeout(updateJpegOutput, 180);
-}
-
-function syncAdvancedMode() {
-  const expanded = $('#advanced-settings').open;
-  const manual = $('#manual-parameters').checked;
-  $('.advanced-preview').hidden = !expanded;
-  $('#preview-grid').classList.toggle('has-target', expanded);
-  $('#manual-fields').disabled = !manual;
-  $('#balance').disabled = manual;
-  syncCarrierControls();
-  $('#advanced-mode-label').textContent = manual ? '手动算法参数' : '尺寸与自动配对';
-  $('#balance-hint').textContent = manual
-    ? '手动算法参数已接管细节保留和水印强度；关闭后由此滑条自动决定。'
-    : '左侧保留更多原图细节；向右会逐级加强预设适配，同时提高水印强度。';
-}
-
-async function updateJpegOutput() {
-  const encoded = state.encoded;
-  if (!encoded) return;
-  const source = encoded.source;
-  const quality = Number($('#jpg-quality').value);
-  const request = ++state.exportVersion;
-  const current = () => state.exportVersion === request && state.encoded === encoded && state.source === source;
-  $('#output-size').textContent = '正在计算…';
-  $('#download-button').disabled = true;
-  $('#restored-empty').hidden = false;
-  $('#restored-empty').textContent = '正在验证最终 JPG 的还原效果…';
-  $('#result-strip').dataset.status = 'checking';
-  $('#restore-metrics').textContent = '正在验证 JPG 还原…';
+function syncSourceMeta(entry) {
+  if (!entry?.width) return;
   try {
-    const blob = await imageBlob(workingCanvas, 'image/jpeg', quality / 100);
-    if (!current()) return;
-    state.output = { blob, quality, verified: false };
-    $('#output-size').textContent = formatBytes(blob.size);
-    $('#output-size').dataset.bytes = String(blob.size);
-    $('#output-size').dataset.quality = String(quality);
-    $('#download-button').dataset.bytes = String(blob.size);
-    $('#download-button').disabled = false;
-    syncWorkflow();
-    $('#result-summary').textContent = '正在验证 JPG 预览…';
-    const pixels = await bitmapPixels(blob);
-    if (!current()) return;
-    const { outputWidth: width, outputHeight: height } = encoded.plan;
-    setCanvas(canvases.mosaic, pixels, width, height);
-    $('#mosaic-empty').hidden = true;
-    $('#result-strip').classList.add('is-ready');
-    try {
-      const verification = await runWorker('verify', {
-        source: { width, height, data: pixels },
-        target: { width, height, data: canvasPixels(canvases.target) },
-        original: { width: source.width, height: source.height, data: source.data.slice() },
-      });
-      if (!current()) return;
-      const resemblance = verification.preset;
-      $('#preset-score').textContent = `最终 JPG 预设轮廓 SSIM ${resemblance.outline.toFixed(4)} · 细节 ${resemblance.detail.toFixed(4)}`;
-      const restored = verification.restored;
-      setCanvas(canvases.restored, restored.data, source.width, source.height);
-      $('#restore-metrics').textContent = `JPG 还原 SSIM ${verification.restoredSSIM.toFixed(4)} · 纠正 ${restored.plan.corrected} 字节`;
-      $('#restored-empty').hidden = true;
-      $('#restored-score').textContent = `来自 JPG ${quality}%`;
-      state.output.verified = true;
-      $('#result-strip').dataset.status = 'ready';
-      $('#result-summary').textContent = `还原验证通过 · JPG ${quality}%`;
-    } catch (error) {
-      if (!current()) return;
-      if (!$('#manual-parameters').checked && !state.recoveryBoost && encoded.plan.step < 24) {
-        state.recoveryBoost = true;
-        requestGeneration(0);
-        return;
-      }
-      $('#restored-score').textContent = '当前 JPG 未能还原';
-      $('#result-strip').dataset.status = 'warning';
-      $('#restored-empty').textContent = '可提高 JPG 质量后再次查看还原效果';
-      $('#restore-metrics').textContent = error.message;
-      $('#result-summary').textContent = '当前 JPG 未能还原，可提高质量后重试';
+    const size = processingSize(entry.width, entry.height, entry.settings); entry.size = size;
+    $('#source-meta').textContent = `${entry.file.name} · 上传 ${entry.width} × ${entry.height} → 处理 ${size.width} × ${size.height}`;
+    $('#source-meta').title = $('#source-meta').textContent;
+    $('#source-dimensions').textContent = `${size.width} × ${size.height}`;
+    $('#source-sizing-summary').textContent = `${entry.width} × ${entry.height} → ${size.width} × ${size.height} px${size.scale === 1 ? ' · 保持尺寸' : size.scale > 1 ? ' · 已放大' : ' · 已缩小'}`;
+    $('#source-scale-value').value = `${size.automatic ? '自动 ' : ''}${(size.scale * 100).toFixed(1)}%`;
+    // The automatic readout is separate from the stored manual scale.
+    $('#source-size-hint').textContent = `上传 ${entry.width} × ${entry.height} → 处理及还原 ${size.width} × ${size.height}。${size.automatic ? '短边目标 1024、长边上限 2960 px，长图及大倍率优先限制输出像素量。' : '使用手动比例，保留原图长宽比。'}`;
+  } catch (error) { $('#source-sizing-summary').textContent = error.message; }
+}
+
+function createRow(entry, kind) {
+  const row = document.createElement('div'); row.className = 'batch-item'; row.setAttribute('role', 'listitem'); row.dataset.id = entry.id;
+  const select = document.createElement('button'); select.type = 'button'; select.className = 'batch-select';
+  const image = document.createElement('img'); image.alt = ''; image.width = 44; image.height = 44;
+  const text = document.createElement('span'); text.className = 'batch-copy';
+  const name = document.createElement('strong'); name.textContent = entry.file.name;
+  const detail = document.createElement('small'); text.append(name, detail);
+  const ring = document.createElement('span'); ring.className = 'progress-ring'; ring.setAttribute('role', 'progressbar'); ring.setAttribute('aria-valuemin', '0'); ring.setAttribute('aria-valuemax', '100');
+  select.append(image, text, ring); select.addEventListener('click', () => selectEntry(entry, kind));
+  const actions = document.createElement('span'); actions.className = 'batch-item-actions';
+  const download = document.createElement('button'); download.type = 'button'; download.className = 'batch-download'; download.textContent = '↓'; download.title = '下载此条目';
+  download.setAttribute('aria-label', `下载 ${entry.file.name}`); download.addEventListener('click', () => { if (isReady(entry)) downloadBlob(kind === 'encode' ? entry.result.jpg : entry.result.blob, filename(entry, kind)); });
+  const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'batch-remove'; remove.textContent = '×'; remove.title = `移除 ${entry.file.name}`;
+  remove.setAttribute('aria-label', remove.title); remove.addEventListener('click', () => removeEntry(entry, kind));
+  actions.append(download, remove); row.append(select, actions);
+  entry.ui = { row, select, image, detail, ring, download }; $(`#${kind === 'encode' ? 'source' : 'decode'}-list`).append(row);
+}
+
+function renderRow(entry, kind) {
+  const { row, select, image, detail, ring, download } = entry.ui;
+  const active = activeEntry(kind) === entry; const percent = Math.round((entry.progress ?? 0) * 100);
+  row.dataset.status = entry.status; row.classList.toggle('is-active', active); select.setAttribute('aria-pressed', String(active));
+  select.title = `${entry.file.name} · ${entry.label}`;
+  if (entry.thumbnail && image.getAttribute('src') !== entry.thumbnail) image.src = entry.thumbnail;
+  image.hidden = !entry.thumbnail;
+  detail.textContent = kind === 'decode' && entry.status === 'done' ? `${entry.result.plan.width} × ${entry.result.plan.height} · 还原完成` : entry.label;
+  ring.style.setProperty('--progress', `${percent * 3.6}deg`);
+  ring.textContent = entry.status === 'done' ? '✓' : entry.status === 'error' || entry.status === 'warning' ? '!' : isProcessing(entry) ? `${percent}%` : '·';
+  ring.setAttribute('aria-valuenow', String(percent)); ring.setAttribute('aria-label', `${entry.file.name}：${entry.label}`);
+  download.disabled = !isReady(entry);
+}
+
+function syncBatch(kind) {
+  const entries = state[kind]; entries.forEach(entry => renderRow(entry, kind));
+  const running = entries.filter(isProcessing).length; const ready = entries.filter(isReady).length;
+  const button = $(`#${kind === 'encode' ? 'encode' : 'decode'}-button`);
+  button.disabled = (kind === 'encode' && !state.presetsReady) || !entries.some(entry => entry.width && !isProcessing(entry) && entry.status !== 'loading');
+  button.classList.toggle('is-busy', running > 0);
+  button.textContent = kind === 'encode' ? entries.length > 1 ? `生成全部混淆图（${entries.length}）` : ready ? '重新生成混淆图' : '生成混淆图'
+    : entries.length > 1 ? `还原全部图像（${entries.length}）` : '还原图像';
+  const all = $(`#download-all-${kind === 'encode' ? 'encoded' : 'restored'}`);
+  all.hidden = entries.length < 2; all.disabled = !ready || all.dataset.packing === 'true';
+  if (all.dataset.packing !== 'true') all.textContent = `下载全部${kind === 'encode' ? ' JPG' : '还原 PNG'}（${ready}，ZIP）`;
+  const failed = entries.filter(entry => entry.status === 'error').length;
+  $(`#${kind}-batch-summary`).textContent = entries.length ? `${ready}/${entries.length} 已完成${running ? ` · ${running} 项处理中或等待中` : ''}${failed ? ` · ${failed} 项失败，可重试` : ''}` : '';
+  document.body.classList.toggle('has-source', state.encode.length > 0);
+  $('#source-file-name').textContent = state.encode.length ? `继续添加图片（已有 ${state.encode.length} 张）` : '选择图片';
+  $('#encoded-file-name').textContent = state.decode.length ? `继续添加混淆图（已有 ${state.decode.length} 张）` : '选择混淆图';
+}
+
+function renderStatus(entry, kind) {
+  if (activeEntry(kind) !== entry) return;
+  if (kind === 'decode') {
+    $('#decode-message').textContent = entry.label;
+    $('#decode-message').classList.toggle('is-success', entry.status === 'done');
+    $('#download-restored').disabled = !isReady(entry);
+  } else {
+    const ready = isReady(entry);
+    $('#download-button').disabled = !ready; $('#download-png').disabled = !ready;
+    $('#result-summary').textContent = entry.status === 'done' ? `还原验证通过 · JPG ${entry.result.quality}%` : entry.status === 'warning' ? '当前 JPG 未能还原，可提高质量后重试' : entry.label;
+    $('#result-strip').dataset.status = entry.status === 'done' ? 'ready' : entry.status === 'warning' ? 'warning' : entry.status === 'error' ? 'error' : isProcessing(entry) ? 'checking' : 'pending';
+    $('#result-strip').classList.toggle('is-ready', ready);
+    $('#output-size').textContent = ready ? formatBytes(entry.result.jpg.size) : isProcessing(entry) ? '正在计算…' : '生成后显示';
+    for (const element of [$('#output-size'), $('#download-button')]) {
+      if (ready) element.dataset.bytes = String(entry.result.jpg.size); else element.removeAttribute('data-bytes');
     }
-  } catch (error) {
-    if (!current()) return;
-    state.output = null;
-    $('#download-button').disabled = true;
-    $('#output-size').textContent = '导出失败';
-    $('#result-strip').dataset.status = 'error';
-    $('#result-summary').textContent = 'JPG 导出未完成';
-    showToast(error.message, true);
+    if (ready) $('#output-size').dataset.quality = String(entry.result.quality); else $('#output-size').removeAttribute('data-quality');
   }
 }
 
-function setPreset(index) {
-  const preset = PRESETS[index];
-  const key = preset.id ?? preset.src;
-  const changed = state.presetKey !== key;
-  state.presetIndex = index;
-  state.presetKey = key;
-  selectedPreset(key);
-  document.querySelectorAll('.preset-option').forEach((button) => {
+async function renderEncode(entry) {
+  const token = ++state.encodePaint; const current = () => activeEntry('encode') === entry && token === state.encodePaint;
+  if (!entry) {
+    $('#preview-area').hidden = true; $('#source-meta').textContent = '尚未选择图像';
+    $('#source-sizing-summary').textContent = '小图自动放大，大图适度缩小；高级模式可调整。';
+    $('#download-button').disabled = $('#download-png').disabled = true; syncDesktopLayout(); return;
+  }
+  syncSourceMeta(entry); renderStatus(entry, 'encode');
+  const result = isReady(entry) ? entry.result : null;
+  if (result) { $('#result-summary').textContent = '正在更新预览…'; $('#result-strip').dataset.status = 'checking'; }
+  $('#preview-area').hidden = !result && !entry.started; syncDesktopLayout();
+  for (const name of ['mosaic', 'restored', 'target']) $(`#${name}-empty`).hidden = !entry.started ? false : Boolean(result && (name !== 'restored' || result.restoredPreview));
+  $('#mosaic-empty').textContent = entry.status === 'error' ? '生成未完成，可调整设置后重试' : entry.label;
+  $('#restored-empty').textContent = result?.warning ? '可提高 JPG 质量后再次查看还原效果' : '生成后显示最终 JPG 的还原效果';
+  $('#mosaic-dimensions').textContent = result ? `${result.plan.outputWidth} × ${result.plan.outputHeight}` : '等待生成';
+  $('#restored-score').textContent = result ? result.warning ? '当前 JPG 未能还原' : `来自 JPG ${result.quality}%` : '等待生成';
+  $('#preset-score').textContent = result ? `最终 JPG 预设轮廓 SSIM ${result.resemblance.outline.toFixed(4)} · 细节 ${result.resemblance.detail.toFixed(4)}` : '生成后显示预设轮廓与细节 SSIM';
+  $('#restore-metrics').textContent = result ? result.warning ?? `JPG 还原 SSIM ${result.restoredSSIM.toFixed(4)} · 纠正 ${result.corrected} 字节` : '生成后显示 JPG 还原 SSIM';
+  const plan = result?.plan;
+  $('#applied-options').textContent = plan ? `${entry.settings.manual ? '手动' : '自动'} · 处理图 ${plan.tileSize}×${plan.tileSize} px 分块 · ${plan.scale} 倍载体 · ${plan.panels} 段 · 坐标 ${plan.coordinateBits} bit/块 · 强度 ${plan.step} · 细节 ${Math.round(plan.colorGain * 100)}%${plan.transparentPixels ? ' · 原图透明像素已合成白底' : ''}` : '生成后显示实际采用的参数';
+  const size = entry.size;
+  if (!size) return;
+  const paints = [paintBlob($('#source-preview'), result?.sourcePreview ?? entry.file, size.width, size.height, current)];
+  if (result) {
+    paints.push(paintBlob($('#mosaic-preview'), result.jpg, plan.outputWidth, plan.outputHeight, current));
+    paints.push(paintBlob($('#target-preview'), result.targetPreview, plan.outputWidth, plan.outputHeight, current));
+    if (result.restoredPreview) paints.push(paintBlob($('#restored-preview'), result.restoredPreview, plan.width, plan.height, current));
+  }
+  await Promise.all(paints);
+  if (current()) { $('#source-empty').hidden = true; renderStatus(entry, 'encode'); }
+}
+
+async function renderDecode(entry) {
+  const token = ++state.decodePaint; const current = () => activeEntry('decode') === entry && token === state.decodePaint;
+  $('#download-restored').disabled = !isReady(entry);
+  $('#decode-empty').hidden = Boolean(isReady(entry));
+  $('#decode-empty').textContent = entry?.label ?? '选择混淆图文件';
+  $('#encoded-meta').textContent = entry?.width ? `${entry.file.name} · ${entry.width} × ${entry.height}` : '选择包含坐标信息的图像';
+  $('#decode-dimensions').textContent = isReady(entry) ? `${entry.result.plan.width} × ${entry.result.plan.height}` : '等待解码';
+  $('#decode-message').textContent = isReady(entry) ? '正在更新还原预览…' : entry?.label ?? '等待输入'; $('#decode-message').classList.toggle('is-success', entry?.status === 'done');
+  if (isReady(entry)) {
+    await paintBlob($('#decode-preview'), entry.result.blob, entry.result.plan.width, entry.result.plan.height, current);
+    if (current()) renderStatus(entry, 'decode');
+  }
+}
+
+function refreshPreview(kind) { (kind === 'encode' ? renderEncode(activeEntry(kind)) : renderDecode(activeEntry(kind))).catch(error => showToast(error.message, true)); }
+function selectEntry(entry, kind) {
+  state[kind === 'encode' ? 'activeEncode' : 'activeDecode'] = entry?.id ?? null;
+  if (kind === 'encode' && entry) writeSettings(entry.settings);
+  previews.reset(); syncBatch(kind); refreshPreview(kind);
+}
+
+function cancelEntry(entry) { clearTimeout(entry.timer); entry.version += 1; entry.controller?.abort(); entry.controller = null; }
+function removeEntry(entry, kind) {
+  const index = state[kind].indexOf(entry); const active = activeEntry(kind) === entry;
+  cancelEntry(entry); state[kind].splice(index, 1); entry.ui.row.remove(); if (entry.thumbnail) URL.revokeObjectURL(entry.thumbnail);
+  entry.result = entry.cached = null;
+  if (active) selectEntry(state[kind][Math.min(index, state[kind].length - 1)], kind); else syncBatch(kind);
+}
+
+async function importFiles(files, kind) {
+  const images = [...files].filter(file => file.type.startsWith('image/'));
+  if (!images.length) throw new Error('请选择有效的图像文件。');
+  const settings = readSettings();
+  const entries = images.map(file => ({ id: crypto.randomUUID(), file, settings: { ...settings }, version: 0, status: 'loading', label: '读取图像…', progress: 0, result: null, started: false }));
+  for (const entry of entries) { state[kind].push(entry); createRow(entry, kind); }
+  selectEntry(entries[0], kind);
+  for (const entry of entries) {
+    try {
+      const bitmap = await createImageBitmap(entry.file);
+      if (!state[kind].includes(entry)) { bitmap.close(); continue; }
+      entry.width = bitmap.width; entry.height = bitmap.height;
+      const scale = Math.min(1, 88 / Math.max(bitmap.width, bitmap.height));
+      const canvas = bitmapCanvas(bitmap, Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale))); bitmap.close();
+      const thumbnail = await imageBlob(canvas); canvas.width = canvas.height = 0;
+      if (!state[kind].includes(entry)) continue;
+      entry.thumbnail = URL.createObjectURL(thumbnail); entry.status = 'idle'; entry.label = '已载入，等待处理';
+    } catch (error) { entry.status = 'error'; entry.label = `读取失败：${error.message}`; }
+    syncBatch(kind); if (activeEntry(kind) === entry) refreshPreview(kind);
+  }
+}
+
+function settingsChanged({ qualityOnly = false } = {}) {
+  syncSettings(); const settings = readSettings();
+  const entries = $('#unify-settings').checked ? state.encode : [activeEntry('encode')].filter(Boolean);
+  for (const entry of entries) {
+    if (JSON.stringify(entry.settings) === JSON.stringify(settings)) continue;
+    const started = entry.started;
+    let cache = qualityOnly ? entry.result ?? entry.cached : null;
+    if (cache && !settings.manual && cache.plan.step !== processingOptions(settings).step) cache = null;
+    cancelEntry(entry); entry.settings = { ...settings }; entry.cached = cache; entry.result = null;
+    if (entry.status === 'loading') continue;
+    entry.status = 'idle'; entry.progress = 0; entry.label = started ? '设置已更新，等待重新生成' : '已载入，等待处理';
+    if (started) scheduleEntry(entry, 'encode', 350);
+  }
+  syncSourceMeta(activeEntry('encode')); syncBatch('encode'); refreshPreview('encode');
+}
+
+function scheduleEntry(entry, kind, delay = 0) {
+  cancelEntry(entry); entry.started = true; entry.status = 'queued'; entry.progress = 0; entry.label = '等待处理';
+  entry.timer = setTimeout(() => processEntry(entry, kind), delay);
+}
+
+async function processEntry(entry, kind) {
+  if (!state[kind].includes(entry) || !entry.width) return;
+  const version = entry.version; const controller = new AbortController(); entry.controller = controller;
+  const current = () => state[kind].includes(entry) && entry.version === version;
+  const settings = { ...entry.settings };
+  let payload; let memory;
+  try {
+    if (kind === 'encode') {
+      const size = processingSize(entry.width, entry.height, settings); const plan = createPlan(size.width, size.height, processingOptions(settings));
+      memory = plan.outputWidth * plan.outputHeight * 24 + size.width * size.height * 12;
+      const index = PRESETS.findIndex(preset => presetKey(preset) === settings.preset);
+      if (index < 0) throw new Error('所选预设已删除，请重新选择。');
+      payload = { action: 'encode-file', file: entry.file, settings, target: state.presetImages[index], compactPreview: state.encode.length > 1, cached: entry.cached ? { raw: entry.cached.raw, plan: entry.cached.plan, boosted: entry.cached.boosted } : null };
+    } else { payload = { action: 'restore-file', file: entry.file }; memory = entry.width * entry.height * 12; }
+    const result = await pool.run(payload, { signal: controller.signal, memory, onProgress: progress => {
+      if (!current()) return;
+      entry.status = 'processing'; entry.progress = progress.fraction; entry.label = progress.label;
+      renderRow(entry, kind); renderStatus(entry, kind);
+    } });
+    if (!current()) return;
+    entry.result = result; entry.cached = null; entry.completedAt = Date.now(); entry.status = result.warning ? 'warning' : 'done'; entry.progress = 1;
+    // Keep recent carriers for instant quality edits, with a fixed byte budget
+    // so a long batch does not retain every enlarged, uncompressed image.
+    let retained = 0;
+    for (const item of [...state.encode].sort((a, b) => (b.completedAt ?? 0) - (a.completedAt ?? 0))) {
+      const cache = item.result ?? item.cached;
+      if (!cache?.raw) continue;
+      retained += cache.raw.size;
+      if (retained > Math.min(pool.memoryBudget / 2, 128 * 1048576)) cache.raw = null;
+    }
+    entry.label = kind === 'encode' ? result.warning ? '已生成 · 还原验证未通过' : '完成 · JPG 还原验证通过'
+      : `${result.plan.tileCount.toLocaleString()} 块已拼回 · 坐标验证通过 · ${result.plan.panels} 段自动拼接 · 已纠正 ${result.plan.corrected} 字节 · 恢复处理尺寸`;
+  } catch (error) {
+    if (!current() || error.name === 'AbortError') return;
+    entry.status = 'error'; entry.label = error.message; entry.result = null;
+    if (activeEntry(kind) === entry) showToast(error.message, true);
+  } finally {
+    if (current()) { entry.controller = null; syncBatch(kind); if (activeEntry(kind) === entry) refreshPreview(kind); }
+  }
+}
+
+function processBatch(kind) {
+  for (const entry of state[kind]) if (entry.width && entry.status !== 'loading' && !isProcessing(entry)) scheduleEntry(entry, kind);
+  syncBatch(kind); refreshPreview(kind);
+  if (kind === 'encode' && matchMedia('(max-width: 640px)').matches) requestAnimationFrame(() => $('#preview-area').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' }));
+}
+
+async function downloadAll(kind) {
+  const entries = state[kind].filter(isReady); if (!entries.length) return;
+  const button = $(`#download-all-${kind === 'encode' ? 'encoded' : 'restored'}`); button.dataset.packing = 'true'; button.disabled = true;
+  try {
+    const files = entries.map(entry => ({ blob: kind === 'encode' ? entry.result.jpg : entry.result.blob, name: filename(entry, kind) }));
+    const zip = await zipFiles(files, (done, total) => { button.textContent = `正在打包 ${done}/${total}`; });
+    downloadBlob(zip, kind === 'encode' ? 'naiwa-obfuscated.zip' : 'naiwa-restored.zip');
+  } catch (error) { showToast(error.message, true); }
+  finally { delete button.dataset.packing; syncBatch(kind); }
+}
+
+async function downloadRawPng() {
+  const entry = activeEntry('encode'); if (!isReady(entry)) return;
+  const result = entry.result; const button = $('#download-png');
+  button.disabled = true; button.textContent = '正在导出 PNG…';
+  try {
+    const index = PRESETS.findIndex(preset => presetKey(preset) === entry.settings.preset);
+    const exported = await pool.run({ action: 'export-png', raw: result.raw, plan: result.plan, file: entry.file, settings: entry.settings, boosted: result.boosted, target: state.presetImages[index] }, { memory: result.plan.outputWidth * result.plan.outputHeight * 12 });
+    downloadBlob(exported.blob, filename(entry, 'encode', true));
+  } catch (error) { showToast(error.message, true); }
+  finally { button.textContent = '另存压缩前 PNG'; button.disabled = !isReady(activeEntry('encode')); }
+}
+
+function setPreset(index, notify = true) {
+  const changed = state.presetIndex !== index;
+  state.presetIndex = index; const preset = PRESETS[index]; if (!preset) return;
+  selectedPreset(presetKey(preset));
+  document.querySelectorAll('.preset-option').forEach(button => {
     const active = Number(button.dataset.index) === index;
-    button.classList.toggle('is-active', active);
-    button.setAttribute('aria-checked', String(active));
-    button.tabIndex = active ? 0 : -1;
+    button.classList.toggle('is-active', active); button.setAttribute('aria-checked', String(active)); button.tabIndex = active ? 0 : -1;
   });
   const image = state.presetImages[index];
-  $('#custom-preset-hint').textContent = preset.filename
-    ? `${preset.saved ? '已保存在此浏览器' : '仅本次可用'} · ${image.width} × ${image.height}`
-    : '自定义预设会自动保存在此浏览器，下次直接选择。';
+  $('#custom-preset-hint').textContent = preset.filename ? `${preset.saved ? '已保存在此浏览器' : '仅本次可用'} · ${image.width} × ${image.height}` : '自定义预设会自动保存在此浏览器，下次直接选择。';
   $('#selected-preset-name').textContent = preset.name;
-  if (changed && (state.encoded || state.encoding)) {
-    state.recoveryBoost = false;
-    requestGeneration();
+  if (notify && changed) settingsChanged();
+}
+
+function renderPresets(index = state.presetIndex) {
+  $('#preset-list').replaceChildren(); PRESETS.forEach(appendPreset); setPreset(index, false);
+}
+function appendPreset(preset, index) {
+  const card = document.createElement('div'); card.className = 'preset-card';
+  const option = document.createElement('button'); option.className = 'preset-option'; option.type = 'button'; option.dataset.index = String(index);
+  option.setAttribute('role', 'radio'); option.setAttribute('aria-checked', 'false'); option.setAttribute('aria-label', preset.name); option.title = preset.name;
+  const image = document.createElement('img'); image.src = preset.src; image.alt = '';
+  const label = document.createElement('span'); label.textContent = preset.name; option.append(image, label);
+  option.addEventListener('click', () => setPreset(index)); card.append(option);
+  if (preset.filename) {
+    const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'preset-remove'; remove.textContent = '×'; remove.title = `删除 ${preset.name}`; remove.setAttribute('aria-label', remove.title);
+    remove.addEventListener('click', async () => {
+      remove.disabled = true;
+      try { await removeCustomPreset(preset); } catch (error) { remove.disabled = false; showToast(`未能删除预设：${error.message}`, true); }
+    }); card.append(remove);
   }
+  $('#preset-list').append(card);
 }
 
 async function initializePresets() {
   const lastSelected = selectedPreset();
-  state.presetBitmaps = await Promise.all(PRESETS.map(async (preset) => {
-    const response = await fetch(preset.src);
-    if (!response.ok) throw new Error(`无法加载预设图：${preset.name}`);
-    return loadBitmap(await response.blob());
+  state.presetImages = await Promise.all(PRESETS.map(async preset => {
+    const response = await fetch(preset.src); if (!response.ok) throw new Error(`无法加载预设图：${preset.name}`);
+    const bitmap = await createImageBitmap(await response.blob()); const canvas = bitmapCanvas(bitmap); bitmap.close();
+    const image = { width: canvas.width, height: canvas.height, data: canvasPixels(canvas) }; canvas.width = canvas.height = 0; return image;
   }));
-  state.presetImages = state.presetBitmaps.map((bitmap) => {
-    const canvas = bitmapToCanvas(bitmap);
-    const image = { width: canvas.width, height: canvas.height, data: canvasPixels(canvas) };
-    bitmap.close();
-    canvas.width = 0;
-    canvas.height = 0;
-    return image;
-  });
-
   try {
     for (const record of await listPresets()) {
-      const bitmap = await loadBitmap(record.blob);
-      const canvas = bitmapToCanvas(bitmap); bitmap.close();
+      const bitmap = await createImageBitmap(record.blob); const canvas = bitmapCanvas(bitmap); bitmap.close();
       PRESETS.push({ id: record.id, name: record.name, filename: record.filename, src: URL.createObjectURL(record.blob), saved: true, record });
-      state.presetImages.push({ width: canvas.width, height: canvas.height, data: canvasPixels(canvas) });
-      canvas.width = canvas.height = 0;
+      state.presetImages.push({ width: canvas.width, height: canvas.height, data: canvasPixels(canvas) }); canvas.width = canvas.height = 0;
     }
   } catch { showToast('浏览器本地存储暂不可用，自定义预设仍可在本次使用。'); }
-  const selected = PRESETS.findIndex(preset => (preset.id ?? preset.src) === lastSelected);
-  renderPresets(selected < 0 ? 0 : selected);
+  const index = PRESETS.findIndex(preset => presetKey(preset) === lastSelected); renderPresets(index < 0 ? 0 : index);
+  state.presetsReady = true; syncBatch('encode');
   $('#custom-preset-picker').disabled = false;
-}
-
-function renderPresets(index = state.presetIndex) {
-  $('#preset-list').replaceChildren();
-  PRESETS.forEach((preset, i) => appendPreset(preset, i));
-  setPreset(index);
-}
-
-function appendPreset(preset, index, list = $('#preset-list')) {
-  const card = document.createElement('div');
-  card.className = 'preset-card';
-  const option = document.createElement('button');
-  option.className = 'preset-option';
-  option.type = 'button';
-  option.dataset.index = String(index);
-  option.setAttribute('role', 'radio');
-  option.setAttribute('aria-checked', 'false');
-  option.setAttribute('aria-label', `${preset.name}${preset.filename ? preset.saved ? '，已保存的自定义预设' : '，本次自定义预设' : ''}`);
-  const thumbnail = document.createElement('img');
-  thumbnail.src = preset.src;
-  thumbnail.alt = '';
-  const label = document.createElement('span');
-  label.textContent = preset.name;
-  option.title = preset.name;
-  option.append(thumbnail, label);
-  option.addEventListener('click', () => setPreset(index));
-  card.append(option);
-  if (preset.filename) {
-    const remove = document.createElement('button');
-    remove.type = 'button'; remove.className = 'preset-remove'; remove.textContent = '×';
-    remove.title = `删除 ${preset.name}`; remove.setAttribute('aria-label', remove.title);
-    remove.addEventListener('click', async () => {
-      remove.disabled = true;
-      try { await removeCustomPreset(preset); }
-      catch (error) { remove.disabled = false; showToast(`未能删除预设：${error.message}`, true); }
-    });
-    card.append(remove);
-  }
-  list.append(card);
-
+  for (const entry of state.encode) if (!entry.started) entry.settings.preset = presetKey(PRESETS[state.presetIndex]);
 }
 
 async function removeCustomPreset(preset) {
   if (preset.saved) await deletePreset(preset.id);
-  const index = PRESETS.indexOf(preset);
-  if (index < 0) return;
-  const wasSelected = state.presetKey === preset.id;
-  const active = PRESETS[state.presetIndex];
-  const [image] = state.presetImages.splice(index, 1);
-  PRESETS.splice(index, 1);
-  renderPresets(wasSelected ? 0 : PRESETS.indexOf(active));
-  URL.revokeObjectURL(preset.src);
+  const index = PRESETS.indexOf(preset); if (index < 0) return;
+  const selected = PRESETS[state.presetIndex]; const wasSelected = selected === preset;
+  const [image] = state.presetImages.splice(index, 1); PRESETS.splice(index, 1);
+  renderPresets(wasSelected ? 0 : PRESETS.indexOf(selected));
+  for (const entry of state.encode) if (entry.settings.preset === preset.id) {
+    cancelEntry(entry); entry.settings.preset = presetKey(PRESETS[0]); entry.result = entry.cached = null; entry.status = 'idle'; entry.label = '预设已删除，已切换默认预设';
+    if (entry.started) scheduleEntry(entry, 'encode', 350);
+  }
+  syncBatch('encode'); refreshPreview('encode'); URL.revokeObjectURL(preset.src);
   showToast(`已删除「${preset.name}」`, false, { label: '撤销', run: async () => {
     if (preset.saved) await savePreset(preset.record);
     if (PRESETS.some(item => item.id === preset.id)) return;
-    preset.src = URL.createObjectURL(preset.record.blob);
-    PRESETS.push(preset); state.presetImages.push(image);
-    renderPresets(wasSelected ? PRESETS.length - 1 : state.presetIndex);
+    preset.src = URL.createObjectURL(preset.record.blob); PRESETS.push(preset); state.presetImages.push(image); renderPresets(wasSelected ? PRESETS.length - 1 : state.presetIndex);
+    if (wasSelected) settingsChanged();
   } });
 }
 
 async function loadCustomPreset(file) {
   if (!file?.type.startsWith('image/')) throw new Error('请选择有效的预设图片。');
-  const bitmap = await loadBitmap(file);
-  const scale = Math.min(1, 1536 / Math.max(bitmap.width, bitmap.height));
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  context.imageSmoothingQuality = 'high';
-  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  bitmap.close();
-  const image = { width: canvas.width, height: canvas.height, data: canvasPixels(canvas) };
-  const blob = await imageBlob(canvas);
-  canvas.width = canvas.height = 0;
+  const bitmap = await createImageBitmap(file); const scale = Math.min(1, 1536 / Math.max(bitmap.width, bitmap.height));
+  const canvas = bitmapCanvas(bitmap, Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale))); bitmap.close();
+  const image = { width: canvas.width, height: canvas.height, data: canvasPixels(canvas) }; const blob = await imageBlob(canvas); canvas.width = canvas.height = 0;
   const hash = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
   const id = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
   const existing = PRESETS.findIndex(preset => preset.id === id);
   if (existing >= 0) { setPreset(existing); showToast('这张图片已经在你的预设中。'); return; }
   const record = { id, name: file.name.replace(/\.[^.]+$/, '') || '自定义预设', filename: file.name, blob, createdAt: Date.now() };
   let saved = true;
-  try { await savePreset(record); }
-  catch { saved = false; showToast('本地保存未成功，这张预设仍可在本次使用。', true); }
+  try { await savePreset(record); } catch { saved = false; showToast('本地保存未成功，这张预设仍可在本次使用。', true); }
   const preset = { id, name: record.name, filename: file.name, src: URL.createObjectURL(blob), saved, record };
-  const index = PRESETS.length;
-  PRESETS.push(preset);
-  state.presetImages.push(image);
-  appendPreset(preset, index);
-  setPreset(index);
+  PRESETS.push(preset); state.presetImages.push(image); appendPreset(preset, PRESETS.length - 1); setPreset(PRESETS.length - 1);
 }
 
-async function loadSource(file) {
-  if (!file?.type.startsWith('image/')) throw new Error('请选择有效的图像文件。');
-  const request = ++state.sourceRequest;
-  const bitmap = await loadBitmap(file);
-  if (request !== state.sourceRequest) { bitmap.close(); return; }
-  const previous = state.original;
-  state.original = { bitmap, width: bitmap.width, height: bitmap.height, name: file.name, bytes: file.size };
-  try { prepareSource(true); }
-  catch (error) { state.original = previous; bitmap.close(); throw error; }
-  previous?.bitmap.close();
-}
-
-function prepareSource(resetPreview = false) {
-  const original = state.original;
-  if (!original) return;
-  const carrierScale = currentCarrierScale();
-  const size = sourceSizing(original.width, original.height, $('#auto-resize').checked ? null : Number($('#source-scale').value), Math.min(16000000, 31000000 / carrierScale ** 2));
-  const canvas = document.createElement('canvas');
-  canvas.width = size.width;
-  canvas.height = size.height;
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  context.imageSmoothingQuality = 'high';
-  context.drawImage(original.bitmap, 0, 0, size.width, size.height);
-  const pixels = canvasPixels(canvas);
-  const width = canvas.width;
-  const height = canvas.height;
-  canvas.width = 0;
-  canvas.height = 0;
-  state.source = { data: new Uint8ClampedArray(pixels), width, height, name: original.name, bytes: original.bytes };
-  document.body.classList.add('has-source');
-  state.generationVersion += 1;
-  state.pendingGeneration = false;
-  state.recoveryBoost = false;
-  clearTimeout(generationTimer);
-  state.encoded = null;
-  invalidateOutput();
-  if (resetPreview) {
-    state.hasPreview = false;
-    $('#preview-area').hidden = true;
-    state.zoomByViewport = new WeakMap();
-    state.activePreviewViewport = null;
-    syncDesktopLayout();
-  }
-  workingCanvas.width = 0;
-  workingCanvas.height = 0;
-  setCanvas(canvases.source, state.source.data, state.source.width, state.source.height);
-  $('#source-empty').hidden = true;
-  $('#source-file-name').textContent = original.name;
-  $('#source-meta').textContent = `${original.name} · 上传 ${original.width} × ${original.height} → 处理 ${width} × ${height}`;
-  $('#source-dimensions').textContent = `${state.source.width} × ${state.source.height}`;
-  $('#source-sizing-summary').textContent = `${original.width} × ${original.height} → ${width} × ${height} px${size.scale === 1 ? ' · 保持尺寸' : size.scale > 1 ? ' · 已放大' : ' · 已缩小'}`;
-  $('#source-meta').title = $('#source-meta').textContent;
-  $('#source-scale-value').value = `${size.automatic ? '自动 ' : ''}${(size.scale * 100).toFixed(1)}%`;
-  if (size.automatic) $('#source-scale').value = (size.scale * 100).toFixed(1);
-  $('#source-size-hint').textContent = `上传 ${original.width} × ${original.height} → 处理及还原 ${width} × ${height}。${size.automatic ? '短边目标 1024、长边上限 2960 px，长图及大倍率优先限制输出像素量。' : '使用手动比例，保留原图长宽比。'}`;
-  $('#encode-button').disabled = $('#encode-button').classList.contains('is-busy');
-  $('#download-button').disabled = true;
-  $('#download-png').disabled = true;
-  $('#mosaic-empty').hidden = false;
-  $('#restored-empty').hidden = false;
-  $('#mosaic-dimensions').textContent = '等待生成';
-  $('#restored-score').textContent = '等待生成';
-  $('#output-size').textContent = '生成后显示';
-  $('#output-size').removeAttribute('data-bytes');
-  $('#output-size').removeAttribute('data-quality');
-  $('#preset-score').textContent = '生成后显示预设轮廓与细节 SSIM';
-  $('#restore-metrics').textContent = '生成后显示 JPG 还原 SSIM';
-  $('#applied-options').textContent = '生成后显示实际采用的参数';
-  $('#target-empty').hidden = false;
-  $('#result-strip').classList.remove('is-ready');
-  $('#result-summary').textContent = '图像已载入';
-  syncWorkflow();
-}
-
-async function imageBlob(canvas, type = 'image/png', quality) {
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error('浏览器无法导出图像。')), type, quality);
+for (const [inputId, pickerId, kind] of [['source-file', 'source-picker', 'encode'], ['encoded-file', 'encoded-picker', 'decode']]) {
+  const picker = $(`#${pickerId}`); const input = $(`#${inputId}`);
+  picker.addEventListener('click', () => input.click());
+  input.addEventListener('change', async () => {
+    const files = [...input.files]; input.value = '';
+    try { if (files.length) await importFiles(files, kind); } catch (error) { showToast(error.message, true); }
+  });
+  picker.addEventListener('dragover', event => { event.preventDefault(); picker.classList.add('is-dragging'); });
+  picker.addEventListener('dragleave', () => picker.classList.remove('is-dragging'));
+  picker.addEventListener('drop', async event => {
+    event.preventDefault(); picker.classList.remove('is-dragging');
+    try { await importFiles(event.dataTransfer.files, kind); } catch (error) { showToast(error.message, true); }
   });
 }
-
-async function downloadCanvas(canvas, filename, type = 'image/png', quality) {
-  const blob = await imageBlob(canvas, type, quality);
-  downloadBlob(blob, filename);
+$('#encode-button').addEventListener('click', () => processBatch('encode'));
+$('#decode-button').addEventListener('click', () => processBatch('decode'));
+$('#unify-settings').addEventListener('change', () => { if ($('#unify-settings').checked) settingsChanged(); else syncSettings(); });
+for (const [key, [id, type]] of Object.entries(fields)) {
+  $(`#${id}`).addEventListener(type === 'checkbox' || id === 'source-scale' ? 'change' : 'input', () => settingsChanged({ qualityOnly: key === 'quality' }));
 }
-
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 30000);
-}
-
-async function encodeCurrentImage() {
-  if (!state.source || state.encoding) return;
-  clearTimeout(generationTimer);
-  state.pendingGeneration = false;
-  state.encoding = true;
-  const version = ++state.generationVersion;
-  const source = state.source;
-  const revealPreview = !state.hasPreview;
-  const button = $('#encode-button');
-  setBusy(button, true, '生成中');
-  $('#result-summary').textContent = '正在分析分块特征…';
-  try {
-    invalidateOutput();
-    $('#download-png').disabled = true;
-    state.encoded = null;
-    $('#result-strip').classList.remove('is-ready');
-    $('#preset-score').textContent = '正在生成…';
-    $('#mosaic-empty').hidden = false;
-    $('#mosaic-empty').textContent = '正在生成混淆图…';
-    const options = currentOptions();
-    const plan = createPlan(source.width, source.height, options);
-    if (plan.outputWidth * plan.outputHeight > 32000000 || Math.max(plan.outputWidth, plan.outputHeight) > 16384) {
-      throw new Error('混淆载体过大，请降低原图缩放比例或载体倍率（最多 3200 万像素、单边 16384 px）。');
-    }
-    const presetIndex = state.presetIndex;
-    const presetImage = state.presetImages[presetIndex];
-    const encoded = await runWorker('encode', {
-      source: { width: source.width, height: source.height, data: source.data.slice() },
-      target: presetPixels(presetIndex),
-      ...options,
-    }, ({ label }) => { if (state.generationVersion === version) $('#result-summary').textContent = `${label}…`; });
-    if (state.generationVersion !== version || state.source !== source) return;
-
-    state.encoded = { plan: encoded.plan, source, options };
-    state.hasPreview = true;
-    $('#preview-area').hidden = false;
-    syncDesktopLayout();
-    setCanvas(workingCanvas, encoded.data, encoded.plan.outputWidth, encoded.plan.outputHeight);
-    setCanvas(canvases.target, encoded.targetImage.data, encoded.targetImage.width, encoded.targetImage.height);
-    encoded.targetImage.data = null;
-    $('#target-empty').hidden = true;
-    $('#mosaic-dimensions').textContent = `${encoded.plan.outputWidth} × ${encoded.plan.outputHeight}`;
-    $('#applied-options').textContent = `${$('#manual-parameters').checked ? '手动' : '自动'} · 处理图 ${encoded.plan.tileSize}×${encoded.plan.tileSize} px 分块 · ${encoded.plan.scale} 倍载体 · ${encoded.plan.panels} 段 · 坐标 ${encoded.plan.coordinateBits} bit/块 · 强度 ${encoded.plan.step} · 细节 ${Math.round(encoded.plan.colorGain * 100)}%${encoded.plan.transparentPixels ? ' · 原图透明像素已合成白底' : ''}`;
-    $('#download-png').disabled = false;
-    setPreview('compare');
-    if (revealPreview) requestAnimationFrame(() => $('#preview-area').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' }));
-    await updateJpegOutput();
-  } catch (error) {
-    if (state.generationVersion !== version) return;
-    showToast(error.message, true);
-    $('#output-size').textContent = '生成未完成';
-    $('#result-summary').textContent = '处理未完成';
-    $('#mosaic-empty').textContent = '生成未完成，可调整设置后重试';
-    $('#result-strip').dataset.status = 'error';
-  } finally {
-    state.encoding = false;
-    setBusy(button, false);
-    button.disabled = !state.source;
-    syncWorkflow();
-    if (state.pendingGeneration) generationTimer = setTimeout(encodeCurrentImage, 0);
-    else if (state.encoded?.source === state.source && !state.output) requestJpegUpdate();
-  }
-}
-
-async function loadEncodedFile(file) {
-  if (!file?.type.startsWith('image/')) throw new Error('请选择有效的图像文件。');
-  const bitmap = await loadBitmap(file);
-  const canvas = bitmapToCanvas(bitmap);
-  const pixels = canvasPixels(canvas);
-  const width = canvas.width;
-  const height = canvas.height;
-  bitmap.close();
-  canvas.width = 0;
-  canvas.height = 0;
-  state.encodedFile = { data: new Uint8ClampedArray(pixels), width, height, name: file.name };
-  state.restoredDownload = null;
-  $('#download-restored').disabled = true;
-  $('#decode-empty').hidden = false;
-  $('#decode-dimensions').textContent = '等待解码';
-  $('#decode-message').classList.remove('is-success');
-  $('#encoded-file-name').textContent = file.name;
-  $('#encoded-meta').textContent = `${file.name} · ${width} × ${height}`;
-  $('#decode-button').disabled = $('#decode-button').classList.contains('is-busy');
-  $('#decode-message').textContent = '图像已载入，等待坐标解码';
-}
-
-async function restoreCurrentImage() {
-  if (!state.encodedFile) return;
-  const input = state.encodedFile;
-  const button = $('#decode-button');
-  state.restoredDownload = null;
-  $('#download-restored').disabled = true;
-  $('#decode-empty').hidden = false;
-  $('#decode-message').classList.remove('is-success');
-  setBusy(button, true, '还原中');
-  $('#decode-message').textContent = '读取坐标信息…';
-  try {
-    const restored = await runWorker('restore', {
-      source: { ...input, data: input.data.slice() },
-    }, ({ label }) => { if (state.encodedFile === input) $('#decode-message').textContent = `${label}…`; });
-    if (state.encodedFile !== input) return;
-    state.restoredDownload = restored;
-    setCanvas(canvases.decode, restored.data, restored.plan.width, restored.plan.height);
-    $('#decode-empty').hidden = true;
-    $('#decode-dimensions').textContent = `${restored.plan.width} × ${restored.plan.height}`;
-    $('#download-restored').disabled = false;
-    $('#decode-message').textContent = `${restored.plan.tileCount.toLocaleString()} 块已拼回 · 坐标验证通过 · ${restored.plan.panels} 段自动拼接 · 已纠正 ${restored.plan.corrected} 字节 · 恢复处理尺寸`;
-    $('#decode-message').classList.add('is-success');
-  } catch (error) {
-    state.restoredDownload = null;
-    $('#download-restored').disabled = true;
-    $('#decode-message').textContent = error.message;
-    $('#decode-message').classList.remove('is-success');
-    showToast(error.message, true);
-  } finally {
-    setBusy(button, false);
-    button.disabled = !state.encodedFile;
-  }
-}
-
-function setPreview(mode) {
-  state.preview = mode;
-  document.querySelectorAll('.preview-choice').forEach((button) => button.classList.toggle('is-active', button.dataset.preview === mode));
-  $('#preview-grid').dataset.mode = mode;
-  state.activePreviewViewport = $(`[data-panel="${mode === 'restored' ? 'restored' : 'mosaic'}"] .canvas-viewport`);
-  requestAnimationFrame(() => applyPreviewZoom());
-}
-
-function visiblePreviewPanels() {
-  return [...document.querySelectorAll('.preview-panel')].filter((panel) => panel.getClientRects().length > 0 && !panel.hidden && getComputedStyle(panel).display !== 'none');
-}
-
-function previewFitScale(panel) {
-  const canvas = panel.querySelector('canvas');
-  const viewport = panel.querySelector('.canvas-viewport');
-  if (!canvas?.width || !canvas?.height || !viewport?.clientWidth || !viewport?.clientHeight) return 1;
-  return Math.min(viewport.clientWidth / canvas.width, viewport.clientHeight / canvas.height);
-}
-
-function zoomState(viewport) {
-  if (!viewport) return { factor: null };
-  let value = state.zoomByViewport.get(viewport);
-  if (!value) { value = { factor: null }; state.zoomByViewport.set(viewport, value); }
-  return value;
-}
-
-function modeViewport(mode = state.preview) {
-  const panel = mode === 'restored' ? 'restored' : 'mosaic';
-  return $(`#preview-grid [data-panel="${panel}"] .canvas-viewport`);
-}
-
-function writeZoomReadout(viewport) {
-  if (!viewport) return;
-  const factor = zoomState(viewport).factor ?? previewFitScale(viewport.closest('.preview-panel'));
-  const text = `${Math.round(factor * 100)}%`;
-  const output = viewport.closest('.decode-preview') ? $('#decode-zoom-value') : $('#zoom-value');
-  if (output) output.textContent = text;
-}
-
-function captureZoomAnchor(viewport, clientX, clientY) {
-  const canvas = viewport?.querySelector('canvas');
-  if (!canvas?.width || !canvas?.height) return null;
-  const view = viewport.getBoundingClientRect();
-  const rect = canvas.getBoundingClientRect();
-  const scale = rect.width / canvas.width;
-  const x = Math.max(0, Math.min(viewport.clientWidth, clientX - view.left));
-  const y = Math.max(0, Math.min(viewport.clientHeight, clientY - view.top));
-  return {
-    viewport, canvas, x, y,
-    imageX: Math.max(0, Math.min(canvas.width, (x - (rect.left - view.left)) / scale)),
-    imageY: Math.max(0, Math.min(canvas.height, (y - (rect.top - view.top)) / scale)),
-  };
-}
-
-function applyPreviewZoom(targetViewport = null, anchor = null) {
-  const panels = targetViewport
-    ? [targetViewport.closest('.preview-panel')].filter(Boolean)
-    : visiblePreviewPanels();
-  for (const panel of panels) {
-    const canvas = panel.querySelector('canvas');
-    const viewport = panel.querySelector('.canvas-viewport');
-    const stage = panel.querySelector('.canvas-stage');
-    if (!canvas?.width || !canvas?.height || !viewport || !stage) continue;
-    const scale = zoomState(viewport).factor ?? previewFitScale(panel);
-    const width = Math.max(1, canvas.width * scale);
-    const height = Math.max(1, canvas.height * scale);
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-    stage.style.width = `${Math.max(viewport.clientWidth, width)}px`;
-    stage.style.height = `${Math.max(viewport.clientHeight, height)}px`;
-  }
-  if (anchor) {
-    const { viewport, canvas, x, y, imageX, imageY } = anchor;
-    const view = viewport.getBoundingClientRect();
-    const rect = canvas.getBoundingClientRect();
-    const contentLeft = rect.left - view.left + viewport.scrollLeft;
-    const contentTop = rect.top - view.top + viewport.scrollTop;
-    const scale = rect.width / canvas.width;
-    viewport.scrollLeft = contentLeft + imageX * scale - x;
-    viewport.scrollTop = contentTop + imageY * scale - y;
-  }
-  if (targetViewport) writeZoomReadout(targetViewport);
-  else {
-    const active = state.activePreviewViewport?.getClientRects().length ? state.activePreviewViewport : modeViewport();
-    if (active?.getClientRects().length) writeZoomReadout(active);
-    const decoded = $('#decode-preview').closest('.canvas-viewport');
-    if (decoded.getClientRects().length) writeZoomReadout(decoded);
-  }
-}
-
-function changePreviewZoom(direction, viewport = null, clientX, clientY) {
-  const target = viewport ?? (state.activePreviewViewport?.getClientRects().length ? state.activePreviewViewport : modeViewport());
-  const panel = target?.closest('.preview-panel');
-  if (!panel || !target?.clientWidth || !target?.clientHeight) return;
-  if (!target.closest('.decode-preview')) state.activePreviewViewport = target;
-  const current = zoomState(target).factor ?? previewFitScale(panel);
-  const anchor = captureZoomAnchor(target,
-    clientX ?? target.getBoundingClientRect().left + target.clientWidth / 2,
-    clientY ?? target.getBoundingClientRect().top + target.clientHeight / 2);
-  zoomState(target).factor = Math.max(0.02, Math.min(8, current * (direction > 0 ? 1.15 : 1 / 1.15)));
-  applyPreviewZoom(target, anchor);
-}
-
-async function bitmapPixels(blob) {
-  const bitmap = await loadBitmap(blob);
-  const canvas = bitmapToCanvas(bitmap);
-  const data = canvasPixels(canvas);
-  bitmap.close();
-  canvas.width = 0;
-  canvas.height = 0;
-  return data;
-}
-
-function setView(view) {
-  document.querySelectorAll('.tab').forEach((button) => button.classList.toggle('is-active', button.dataset.view === view));
-  document.querySelectorAll('.view').forEach((section) => {
-    const active = section.id === `${view}-view`;
-    section.hidden = !active;
-    section.classList.toggle('is-visible', active);
-  });
-  syncDesktopLayout();
-  requestAnimationFrame(() => applyPreviewZoom());
-}
-
-$('#source-picker').addEventListener('click', () => $('#source-file').click());
-$('#source-file').addEventListener('change', async (event) => {
-  try { if (event.target.files[0]) await loadSource(event.target.files[0]); }
-  catch (error) { showToast(error.message, true); }
-});
-$('#source-file').addEventListener('dragover', (event) => event.preventDefault());
-$('#source-picker').addEventListener('dragover', (event) => { event.preventDefault(); event.currentTarget.classList.add('is-dragging'); });
-$('#source-picker').addEventListener('dragleave', (event) => event.currentTarget.classList.remove('is-dragging'));
-$('#source-picker').addEventListener('drop', async (event) => {
-  event.preventDefault();
-  event.currentTarget.classList.remove('is-dragging');
-  try { await loadSource(event.dataTransfer.files[0]); }
-  catch (error) { showToast(error.message, true); }
-});
-$('#encode-button').addEventListener('click', async () => {
-  await encodeCurrentImage();
-});
+$('#advanced-settings').addEventListener('toggle', () => { syncSettings(); requestAnimationFrame(() => previews.apply()); });
+$('#download-button').addEventListener('click', () => { const entry = activeEntry('encode'); if (isReady(entry)) downloadBlob(entry.result.jpg, filename(entry, 'encode')); });
+$('#download-png').addEventListener('click', downloadRawPng);
+$('#download-restored').addEventListener('click', () => { const entry = activeEntry('decode'); if (isReady(entry)) downloadBlob(entry.result.blob, filename(entry, 'decode')); });
+$('#download-all-encoded').addEventListener('click', () => downloadAll('encode'));
+$('#download-all-restored').addEventListener('click', () => downloadAll('decode'));
 $('#custom-preset-picker').addEventListener('click', () => $('#custom-preset-file').click());
-$('#custom-preset-file').addEventListener('change', async (event) => {
-  try { if (event.target.files[0]) await loadCustomPreset(event.target.files[0]); }
-  catch (error) { showToast(error.message, true); }
-  event.target.value = '';
+$('#custom-preset-file').addEventListener('change', async event => {
+  const file = event.target.files[0]; event.target.value = '';
+  try { if (file) await loadCustomPreset(file); } catch (error) { showToast(error.message, true); }
 });
-function resizeSource() {
-  const regenerate = Boolean(state.encoded || state.encoding || state.pendingGeneration);
-  try {
-    prepareSource();
-    if (regenerate) requestGeneration();
-  } catch (error) { showToast(error.message, true); }
-}
-$('#auto-resize').addEventListener('change', () => {
-  $('#source-scale').disabled = $('#auto-resize').checked;
-  if (!$('#auto-resize').checked) $('#source-scale').value = Math.max(1, Math.min(1600, Number($('#source-scale').value)));
-  resizeSource();
+const customPicker = $('#custom-preset-picker');
+customPicker.addEventListener('dragover', event => { event.preventDefault(); customPicker.classList.add('is-dragging'); });
+customPicker.addEventListener('dragleave', () => customPicker.classList.remove('is-dragging'));
+customPicker.addEventListener('drop', async event => {
+  event.preventDefault(); customPicker.classList.remove('is-dragging');
+  try { if (event.dataTransfer.files[0]) await loadCustomPreset(event.dataTransfer.files[0]); } catch (error) { showToast(error.message, true); }
 });
-$('#source-scale').addEventListener('change', resizeSource);
-$('#download-button').addEventListener('click', () => {
-  if (state.output && !$('#download-button').disabled) downloadBlob(state.output.blob, `naiwa-obfuscated-q${state.output.quality}.jpg`);
-});
-$('#download-png').addEventListener('click', () => {
-  if (state.encoded && !$('#download-png').disabled) downloadCanvas(workingCanvas, 'naiwa-obfuscated.png');
-});
-$('#strength').addEventListener('input', (event) => { $('#strength-value').value = event.target.value; });
-$('#jpg-quality').addEventListener('input', (event) => {
-  $('#jpg-quality-value').value = `${event.target.value}%`;
-  if (state.recoveryBoost && Number(event.target.value) >= 65 && !$('#manual-parameters').checked) {
-    state.recoveryBoost = false;
-    if (state.encoded || state.encoding) requestGeneration();
-    return;
-  }
-  if (state.encoded || state.encoding) requestJpegUpdate();
-});
-$('#balance').addEventListener('input', (event) => {
-  const value = Number(event.target.value);
-  $('#balance-value').value = value < 34 ? '还原画质优先' : value > 66 ? '预设相似度优先' : '均衡';
-  state.recoveryBoost = false;
-  if (!$('#manual-parameters').checked && (state.encoded || state.encoding)) requestGeneration();
-});
-$('#manual-parameters').addEventListener('change', () => {
-  syncAdvancedMode();
-  state.recoveryBoost = false;
-  if (state.encoded || state.encoding) requestGeneration();
-});
-$('#advanced-settings').addEventListener('toggle', syncAdvancedMode);
-$('#tile-size').addEventListener('input', () => {
-  const tileSize = Number($('#tile-size').value);
-  $('#tile-size-value').value = `${tileSize} px`;
-  syncCarrierControls();
-  state.recoveryBoost = false;
-  if ($('#auto-resize').checked && state.original) { resizeSource(); return; }
-  if (state.encoded || state.encoding) requestGeneration();
-});
-for (const selector of ['#carrier-scale', '#color-adapt', '#color-gain', '#preset-fit', '#strength']) {
-  $(selector).addEventListener('input', () => {
-    if (selector === '#carrier-scale') syncCarrierControls();
-    state.recoveryBoost = false;
-    if (selector === '#carrier-scale' && $('#auto-resize').checked && state.original) { resizeSource(); return; }
-    if ((selector === '#carrier-scale' || $('#manual-parameters').checked) && (state.encoded || state.encoding)) requestGeneration();
-  });
-}
-$('#auto-carrier').addEventListener('change', () => {
-  syncCarrierControls();
-  if ($('#auto-resize').checked && state.original) { resizeSource(); return; }
-  if (state.encoded || state.encoding) requestGeneration();
-});
-document.querySelectorAll('.preview-choice').forEach((button) => button.addEventListener('click', () => setPreview(button.dataset.preview)));
-document.querySelectorAll('[data-zoom]').forEach((button) => button.addEventListener('click', () => {
-  const viewport = button.closest('.decode-preview')
-    ? $('#decode-preview').closest('.canvas-viewport')
-    : (state.activePreviewViewport?.getClientRects().length ? state.activePreviewViewport : modeViewport());
-  if (button.dataset.zoom === 'in' || button.dataset.zoom === 'out') {
-    changePreviewZoom(button.dataset.zoom === 'in' ? 1 : -1, viewport);
-    return;
-  }
-  zoomState(viewport).factor = button.dataset.zoom === 'fit' ? null : 1;
-  viewport.scrollLeft = 0;
-  viewport.scrollTop = 0;
-  if (!button.closest('.decode-preview')) state.activePreviewViewport = viewport;
-  applyPreviewZoom(viewport);
-}));
-document.querySelectorAll('.canvas-viewport').forEach((viewport) => viewport.addEventListener('wheel', (event) => {
-  if (!viewport.querySelector('canvas')?.width) return;
-  event.preventDefault();
-  if (!viewport.closest('.decode-preview')) state.activePreviewViewport = viewport;
-  changePreviewZoom(event.deltaY < 0 ? 1 : -1, viewport, event.clientX, event.clientY);
-}, { passive: false }));
-document.querySelectorAll('.canvas-viewport').forEach((viewport) => {
-  let drag = null;
-  viewport.addEventListener('pointerenter', () => {
-    if (!viewport.closest('.decode-preview')) {
-      state.activePreviewViewport = viewport;
-      writeZoomReadout(viewport);
-    }
-  });
-  viewport.addEventListener('pointerdown', (event) => {
-    if (event.pointerType !== 'mouse' || event.button !== 0 || !viewport.querySelector('canvas')?.width) return;
-    drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
-    viewport.setPointerCapture(event.pointerId);
-    viewport.classList.add('is-panning');
-    event.preventDefault();
-  });
-  viewport.addEventListener('pointermove', (event) => {
-    if (!drag || drag.id !== event.pointerId) return;
-    viewport.scrollLeft = drag.left - (event.clientX - drag.x);
-    viewport.scrollTop = drag.top - (event.clientY - drag.y);
-  });
-  const finishPan = (event) => {
-    if (!drag || drag.id !== event.pointerId) return;
-    drag = null;
-    viewport.classList.remove('is-panning');
-  };
-  viewport.addEventListener('pointerup', finishPan);
-  viewport.addEventListener('pointercancel', finishPan);
-  viewport.addEventListener('lostpointercapture', finishPan);
-});
-$('#encoded-picker').addEventListener('click', () => $('#encoded-file').click());
-$('#encoded-file').addEventListener('change', async (event) => {
-  try { if (event.target.files[0]) await loadEncodedFile(event.target.files[0]); }
-  catch (error) { showToast(error.message, true); }
-});
-$('#decode-button').addEventListener('click', restoreCurrentImage);
-$('#download-restored').addEventListener('click', () => {
-  if (!state.restoredDownload) return;
-  setCanvas(canvases.decode, state.restoredDownload.data, state.restoredDownload.plan.width, state.restoredDownload.plan.height);
-  downloadCanvas(canvases.decode, 'naiwa-restored.png');
-});
-document.querySelectorAll('.tab').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
-window.addEventListener('resize', () => applyPreviewZoom());
-if ('ResizeObserver' in window) {
-  const previewObserver = new ResizeObserver(() => applyPreviewZoom());
-  previewObserver.observe($('#preview-area'));
-  previewObserver.observe($('.decode-preview'));
-}
-
-initializePresets().catch((error) => showToast(error.message, true));
-syncAdvancedMode();
-
-$('#preset-list').addEventListener('keydown', (event) => {
+$('#preset-list').addEventListener('keydown', event => {
   if (!event.target.classList.contains('preset-option')) return;
   const index = Number(event.target.dataset.index);
-  const destination = event.key === 'Home' ? 0 : event.key === 'End' ? PRESETS.length - 1
-    : ['ArrowRight', 'ArrowDown'].includes(event.key) ? (index + 1) % PRESETS.length
-    : ['ArrowLeft', 'ArrowUp'].includes(event.key) ? (index + PRESETS.length - 1) % PRESETS.length : null;
+  const destination = event.key === 'Home' ? 0 : event.key === 'End' ? PRESETS.length - 1 : ['ArrowRight', 'ArrowDown'].includes(event.key) ? (index + 1) % PRESETS.length : ['ArrowLeft', 'ArrowUp'].includes(event.key) ? (index + PRESETS.length - 1) % PRESETS.length : null;
   if (destination === null) return;
-  event.preventDefault(); setPreset(destination);
-  $(`.preset-option[data-index="${destination}"]`).focus();
+  event.preventDefault(); setPreset(destination); $(`.preset-option[data-index="${destination}"]`).focus();
 });
-
-for (const [selector, loader] of [['#encoded-picker', loadEncodedFile], ['#custom-preset-picker', loadCustomPreset]]) {
-  const zone = $(selector);
-  zone.addEventListener('dragover', (event) => { event.preventDefault(); zone.classList.add('is-dragging'); });
-  zone.addEventListener('dragleave', () => zone.classList.remove('is-dragging'));
-  zone.addEventListener('drop', async (event) => {
-    event.preventDefault(); zone.classList.remove('is-dragging');
-    try { if (event.dataTransfer.files[0]) await loader(event.dataTransfer.files[0]); }
-    catch (error) { showToast(error.message, true); }
-  });
-}
+document.querySelectorAll('.tab').forEach(button => button.addEventListener('click', () => {
+  document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('is-active', tab === button));
+  document.querySelectorAll('.view').forEach(section => { const active = section.id === `${button.dataset.view}-view`; section.hidden = !active; section.classList.toggle('is-visible', active); });
+  syncDesktopLayout(); requestAnimationFrame(() => previews.apply());
+}));
+initializePresets().catch(error => showToast(error.message, true));
+syncSettings(); syncBatch('encode'); syncBatch('decode');
