@@ -5,6 +5,7 @@ import { listPresets, savePreset, deletePreset, selectedPreset } from './preset-
 import { WorkerPool } from './worker-pool.mjs';
 import { initializePreviews } from './preview-controller.mjs';
 import { zipFiles } from './zip-store.mjs';
+import { isGif } from './gif-codec.mjs';
 
 const $ = selector => document.querySelector(selector);
 const PRESETS = [
@@ -12,12 +13,17 @@ const PRESETS = [
   { name: '鼠蛙', src: './images/static/naishu.png' },
   { name: '蛙狗', src: './images/static/naigou.png' },
   { name: '蛙蛋', src: './images/static/naidan.png' },
+  { name: '奶蛙 GIF', src: './images/animated/1.gif', animated: true },
+  { name: '鼠蛙 GIF', src: './images/animated/2.gif', animated: true },
 ];
-const state = { encode: [], decode: [], activeEncode: null, activeDecode: null, presetIndex: 0, presetImages: [], presetsReady: false, encodePaint: 0, decodePaint: 0 };
+const state = { encode: [], decode: [], activeEncode: null, activeDecode: null, presetIndex: 0, presetImages: [], presetGifBytes: [], presetsReady: false, encodePaint: 0, decodePaint: 0 };
 const pool = new WorkerPool();
 const previews = initializePreviews();
 const activeEntry = kind => state[kind].find(entry => entry.id === state[kind === 'encode' ? 'activeEncode' : 'activeDecode']);
 const presetKey = preset => preset.id ?? preset.src;
+const animatedPreset = key => PRESETS.find(preset => presetKey(preset) === key)?.animated === true;
+const gifOutput = entry => Boolean(entry?.isGif || animatedPreset(entry?.settings?.preset));
+const outputIsGif = entry => entry?.result?.isGif ?? gifOutput(entry);
 const isReady = entry => entry?.result && ['done', 'warning'].includes(entry.status);
 const isProcessing = entry => ['queued', 'processing'].includes(entry.status);
 const fields = {
@@ -65,7 +71,11 @@ function showToast(message, isError = false, action) {
 const formatBytes = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(2)} MB` : bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
 const stem = entry => entry.file.name.replace(/\.[^.]+$/, '') || 'image';
 function filename(entry, kind, raw = false) {
-  if (kind === 'decode') return `${stem(entry)}-restored.png`;
+  if (kind === 'decode') {
+    const extension = ({ 'image/gif': 'gif', 'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/bmp': 'bmp', 'image/avif': 'avif', 'image/tiff': 'tiff', 'image/svg+xml': 'svg', 'image/x-icon': 'ico' })[entry.result?.mime] ?? (entry.isGif ? 'gif' : 'png');
+    return `${stem(entry)}-restored.${extension}`;
+  }
+  if (outputIsGif(entry)) return `${stem(entry)}-obfuscated.gif`;
   return raw ? `${stem(entry)}-obfuscated.png` : `${stem(entry)}-obfuscated-q${entry.result.quality}.jpg`;
 }
 function downloadBlob(blob, name) {
@@ -88,6 +98,20 @@ async function paintBlob(canvas, blob, width, height, current) {
     canvas.getContext('2d', { willReadFrequently: true }).putImageData(new ImageData(pixels, width, height), 0, 0);
     requestAnimationFrame(() => previews.apply(canvas.closest('.canvas-viewport'))); return;
   }
+  const viewport = canvas.closest('.canvas-viewport'); let animated = viewport.querySelector('.preview-animation');
+  if (blob.type === 'image/gif') {
+    if (!animated) { animated = document.createElement('img'); animated.className = 'preview-animation'; animated.alt = ''; canvas.parentElement.append(animated); }
+    const previous = animated.dataset.objectUrl;
+    const url = URL.createObjectURL(blob); animated.dataset.objectUrl = url; animated.src = url;
+    animated.width = width; animated.height = height; animated.hidden = false; canvas.hidden = true;
+    canvas.width = width; canvas.height = height;
+    try { await animated.decode(); } catch (error) { if (current()) throw error; }
+    if (previous) URL.revokeObjectURL(previous);
+    if (!current()) { URL.revokeObjectURL(url); return; }
+    requestAnimationFrame(() => previews.apply(viewport)); return;
+  }
+  if (animated) { animated.hidden = true; const previous = animated.dataset.objectUrl; delete animated.dataset.objectUrl; animated.removeAttribute('src'); if (previous) URL.revokeObjectURL(previous); }
+  canvas.hidden = false;
   const bitmap = await createImageBitmap(blob);
   if (!current()) { bitmap.close(); return; }
   canvas.width = width; canvas.height = height;
@@ -102,16 +126,20 @@ function syncDesktopLayout() {
 
 function syncSettings() {
   const settings = readSettings(); const scale = carrierScale(settings);
+  const gifActive = Boolean(activeEntry('encode')?.isGif || animatedPreset(settings.preset));
+  $('#jpg-quality').disabled = gifActive;
+  $('#jpg-quality-hint').textContent = gifActive ? 'GIF 保留动画帧和调色板；此滑条仅适用于 JPG 输出。' : '生成后可继续调节，实时显示 JPG 的实际大小。';
   if (settings.autoCarrier) $('#carrier-scale').value = String(scale);
-  $('#carrier-scale').disabled = settings.autoCarrier; $('#source-scale').disabled = settings.autoResize;
-  $('#tile-size-value').value = `${settings.tileSize} px · ${scale}×`;
-  $('#tile-size-hint').textContent = `${settings.tileSize} px 分块 · ${settings.autoCarrier ? '自动匹配' : '手动使用'} ${scale} 倍载体；分块越细，倍率越高、输出也越大。`;
-  $('#carrier-scale-hint').textContent = settings.autoCarrier ? `当前 ${settings.tileSize} px 分块自动配 ${scale} 倍载体。高倍率会增加输出尺寸。` : '可手动选择 1–8 倍；细分块搭配低倍率可能无法容纳坐标。';
+  $('#carrier-scale').disabled = gifActive || settings.autoCarrier; $('#auto-carrier').disabled = gifActive;
+  $('#source-scale').disabled = gifActive || settings.autoResize; $('#auto-resize').disabled = gifActive;
+  $('#tile-size-value').value = gifActive ? `${settings.tileSize} px · GIF` : `${settings.tileSize} px · ${scale}×`;
+  $('#tile-size-hint').textContent = gifActive ? `${settings.tileSize} px 分块用于适配每帧预设轮廓；GIF 使用索引色输出，不放大载体。` : `${settings.tileSize} px 分块 · ${settings.autoCarrier ? '自动匹配' : '手动使用'} ${scale} 倍载体；分块越细，倍率越高、输出也越大。`;
+  $('#carrier-scale-hint').textContent = gifActive ? 'GIF 保持 1 倍索引色载体，不使用静态图的载体倍率。' : settings.autoCarrier ? `当前 ${settings.tileSize} px 分块自动配 ${scale} 倍载体。高倍率会增加输出尺寸。` : '可手动选择 1–8 倍；细分块搭配低倍率可能无法容纳坐标。';
   $('#jpg-quality-value').value = `${settings.quality}%`; $('#strength-value').value = String(settings.strength);
   $('#balance-value').value = settings.balance < 34 ? '还原画质优先' : settings.balance > 66 ? '预设相似度优先' : '均衡';
   $('#manual-fields').disabled = !settings.manual; $('#balance').disabled = settings.manual;
-  $('#advanced-mode-label').textContent = settings.manual ? '手动算法参数' : '尺寸与自动配对';
-  $('#balance-hint').textContent = settings.manual ? '手动算法参数已接管细节保留和水印强度。' : '左侧保留更多原图细节；向右会逐级加强预设适配，同时提高水印强度。';
+  $('#advanced-mode-label').textContent = gifActive ? 'GIF 帧适配参数' : settings.manual ? '手动算法参数' : '尺寸与自动配对';
+  $('#balance-hint').textContent = gifActive ? 'GIF 按每帧与预设轮廓匹配；向右增强预设颜色适配。' : settings.manual ? '手动算法参数已接管细节保留和水印强度。' : '左侧保留更多原图细节；向右会逐级加强预设适配，同时提高水印强度。';
   $('.advanced-preview').hidden = !$('#advanced-settings').open;
   $('#preview-grid').classList.toggle('has-target', $('#advanced-settings').open);
   $('#batch-settings-hint').textContent = $('#unify-settings').checked ? '调节设置会应用到所有条目。' : '仅调整当前选中条目，其他条目保留各自设置。';
@@ -120,14 +148,22 @@ function syncSettings() {
 function syncSourceMeta(entry) {
   if (!entry?.width) return;
   try {
-    const size = processingSize(entry.width, entry.height, entry.settings); entry.size = size;
+    const animatedOutput = gifOutput(entry);
+    const gifScale = Math.min(1, 384 / Math.max(entry.width, entry.height));
+    const size = animatedOutput
+      ? { width: Math.max(1, Math.round(entry.width * gifScale)), height: Math.max(1, Math.round(entry.height * gifScale)), scale: gifScale, automatic: true }
+      : processingSize(entry.width, entry.height, entry.settings);
+    entry.size = size;
     $('#source-meta').textContent = `${entry.file.name} · 上传 ${entry.width} × ${entry.height} → 处理 ${size.width} × ${size.height}`;
     $('#source-meta').title = $('#source-meta').textContent;
     $('#source-dimensions').textContent = `${size.width} × ${size.height}`;
     $('#source-sizing-summary').textContent = `${entry.width} × ${entry.height} → ${size.width} × ${size.height} px${size.scale === 1 ? ' · 保持尺寸' : size.scale > 1 ? ' · 已放大' : ' · 已缩小'}`;
     $('#source-scale-value').value = `${size.automatic ? '自动 ' : ''}${(size.scale * 100).toFixed(1)}%`;
     // The automatic readout is separate from the stored manual scale.
-    $('#source-size-hint').textContent = `上传 ${entry.width} × ${entry.height} → 处理及还原 ${size.width} × ${size.height}。${size.automatic ? '短边目标 1024、长边上限 2960 px，长图及大倍率优先限制输出像素量。' : '使用手动比例，保留原图长宽比。'}`;
+    $('#source-size-hint').textContent = animatedOutput
+      ? entry.isGif ? `上传 ${entry.width} × ${entry.height} → GIF 帧适配 ${size.width} × ${size.height}。GIF 按帧数与处理预算自动缩放，原始 GIF 可无损还原。`
+        : `静态原图将逐帧适配 GIF 预设；输出最多 ${size.width} × ${size.height}，还原时取回原静态文件。`
+      : `上传 ${entry.width} × ${entry.height} → 处理及还原 ${size.width} × ${size.height}。${size.automatic ? '短边目标 1024、长边上限 2960 px，长图及大倍率优先限制输出像素量。' : '使用手动比例，保留原图长宽比。'}`;
   } catch (error) { $('#source-sizing-summary').textContent = error.message; }
 }
 
@@ -173,7 +209,7 @@ function syncBatch(kind) {
     : entries.length > 1 ? `还原全部图像（${entries.length}）` : '还原图像';
   const all = $(`#download-all-${kind === 'encode' ? 'encoded' : 'restored'}`);
   all.hidden = entries.length < 2; all.disabled = !ready || all.dataset.packing === 'true';
-  if (all.dataset.packing !== 'true') all.textContent = `下载全部${kind === 'encode' ? ' JPG' : '还原 PNG'}（${ready}，ZIP）`;
+  if (all.dataset.packing !== 'true') all.textContent = `下载全部${kind === 'encode' ? '混淆图' : '还原图'}（${ready}，ZIP）`;
   const failed = entries.filter(entry => entry.status === 'error').length;
   $(`#${kind}-batch-summary`).textContent = entries.length ? `${ready}/${entries.length} 已完成${running ? ` · ${running} 项处理中或等待中` : ''}${failed ? ` · ${failed} 项失败，可重试` : ''}` : '';
   document.body.classList.toggle('has-source', state.encode.length > 0);
@@ -189,8 +225,11 @@ function renderStatus(entry, kind) {
     $('#download-restored').disabled = !isReady(entry);
   } else {
     const ready = isReady(entry);
-    $('#download-button').disabled = !ready; $('#download-png').disabled = !ready;
-    $('#result-summary').textContent = entry.status === 'done' ? `还原验证通过 · JPG ${entry.result.quality}%` : entry.status === 'warning' ? '当前 JPG 未能还原，可提高质量后重试' : entry.label;
+    const animatedOutput = outputIsGif(entry);
+    $('#download-button').disabled = !ready; $('#download-png').disabled = !ready || animatedOutput;
+    $('#download-png').textContent = animatedOutput ? 'GIF 含可还原原图数据' : '另存压缩前 PNG';
+    $('#download-button').textContent = animatedOutput ? '下载 GIF' : '下载 JPG';
+    $('#result-summary').textContent = entry.status === 'done' ? animatedOutput ? `GIF ${entry.result.gifFrames} 帧 · 原图精确还原验证通过` : `还原验证通过 · JPG ${entry.result.quality}%` : entry.status === 'warning' ? '当前 JPG 未能还原，可提高质量后重试' : entry.label;
     $('#result-strip').dataset.status = entry.status === 'done' ? 'ready' : entry.status === 'warning' ? 'warning' : entry.status === 'error' ? 'error' : isProcessing(entry) ? 'checking' : 'pending';
     $('#result-strip').classList.toggle('is-ready', ready);
     $('#output-size').textContent = ready ? formatBytes(entry.result.jpg.size) : isProcessing(entry) ? '正在计算…' : '生成后显示';
@@ -209,25 +248,28 @@ async function renderEncode(entry) {
     $('#download-button').disabled = $('#download-png').disabled = true; syncDesktopLayout(); return;
   }
   syncSourceMeta(entry); renderStatus(entry, 'encode');
+  syncSettings();
   const result = isReady(entry) ? entry.result : null;
+  const animatedOutput = result?.isGif ?? gifOutput(entry);
   if (result) { $('#result-summary').textContent = '正在更新预览…'; $('#result-strip').dataset.status = 'checking'; }
   $('#preview-area').hidden = !result && !entry.started; syncDesktopLayout();
   for (const name of ['mosaic', 'restored', 'target']) $(`#${name}-empty`).hidden = !entry.started ? false : Boolean(result && (name !== 'restored' || result.restoredPreview));
   $('#mosaic-empty').textContent = entry.status === 'error' ? '生成未完成，可调整设置后重试' : entry.label;
-  $('#restored-empty').textContent = result?.warning ? '可提高 JPG 质量后再次查看还原效果' : '生成后显示最终 JPG 的还原效果';
+  $('#restored-empty').textContent = result?.warning ? '可提高 JPG 质量后再次查看还原效果' : result?.isGif ? result.originalMime === 'image/gif' ? '生成后显示可精确还原的原动画' : '生成后显示可精确还原的原静态图' : '生成后显示最终 JPG 的还原效果';
   $('#mosaic-dimensions').textContent = result ? `${result.plan.outputWidth} × ${result.plan.outputHeight}` : '等待生成';
-  $('#restored-score').textContent = result ? result.warning ? '当前 JPG 未能还原' : `来自 JPG ${result.quality}%` : '等待生成';
-  $('#preset-score').textContent = result ? `最终 JPG 预设轮廓 SSIM ${result.resemblance.outline.toFixed(4)} · 细节 ${result.resemblance.detail.toFixed(4)}` : '生成后显示预设轮廓与细节 SSIM';
-  $('#restore-metrics').textContent = result ? result.warning ?? `JPG 还原 SSIM ${result.restoredSSIM.toFixed(4)} · 纠正 ${result.corrected} 字节` : '生成后显示 JPG 还原 SSIM';
+  $('#target-dimensions').textContent = result ? `${result.targetWidth ?? result.plan.outputWidth} × ${result.targetHeight ?? result.plan.outputHeight}` : '与混淆图同尺寸';
+  $('#restored-score').textContent = result ? result.warning ? '当前 JPG 未能还原' : result.isGif ? result.originalMime === 'image/gif' ? '精确原 GIF' : '精确原静态图' : `来自 JPG ${result.quality}%` : '等待生成';
+  $('#preset-score').textContent = result ? result.isGif ? `GIF 帧平均预设 SSIM ${result.resemblance.outline.toFixed(4)} · 细节 ${result.resemblance.detail.toFixed(4)} · 对齐 ${result.targetFrames} 帧` : `最终 JPG 预设轮廓 SSIM ${result.resemblance.outline.toFixed(4)} · 细节 ${result.resemblance.detail.toFixed(4)}` : '生成后显示预设轮廓与细节 SSIM';
+  $('#restore-metrics').textContent = result ? result.warning ?? (result.isGif ? `内嵌原图 · ${formatBytes(result.originalBytes)}` : `JPG 还原 SSIM ${result.restoredSSIM.toFixed(4)} · 纠正 ${result.corrected} 字节`) : '生成后显示 JPG 还原 SSIM';
   const plan = result?.plan;
-  $('#applied-options').textContent = plan ? `${entry.settings.manual ? '手动' : '自动'} · 处理图 ${plan.tileSize}×${plan.tileSize} px 分块 · ${plan.scale} 倍载体 · ${plan.panels} 段 · 坐标 ${plan.coordinateBits} bit/块 · 强度 ${plan.step} · 细节 ${Math.round(plan.colorGain * 100)}%${plan.transparentPixels ? ' · 原图透明像素已合成白底' : ''}` : '生成后显示实际采用的参数';
+  $('#applied-options').textContent = plan ? animatedOutput ? `索引色 GIF · ${result.gifFrames} 帧 · ${plan.width} × ${plan.height} · 8 bit 色彩映射 · 细节 ${Math.round(plan.colorGain * 100)}%` : `${entry.settings.manual ? '手动' : '自动'} · 处理图 ${plan.tileSize}×${plan.tileSize} px 分块 · ${plan.scale} 倍载体 · ${plan.panels} 段 · 坐标 ${plan.coordinateBits} bit/块 · 强度 ${plan.step} · 细节 ${Math.round(plan.colorGain * 100)}%${plan.transparentPixels ? ' · 原图透明像素已合成白底' : ''}` : '生成后显示实际采用的参数';
   const size = entry.size;
   if (!size) return;
   const paints = [paintBlob($('#source-preview'), result?.sourcePreview ?? entry.file, size.width, size.height, current)];
   if (result) {
     paints.push(paintBlob($('#mosaic-preview'), result.jpg, plan.outputWidth, plan.outputHeight, current));
-    paints.push(paintBlob($('#target-preview'), result.targetPreview, plan.outputWidth, plan.outputHeight, current));
-    if (result.restoredPreview) paints.push(paintBlob($('#restored-preview'), result.restoredPreview, plan.width, plan.height, current));
+    paints.push(paintBlob($('#target-preview'), result.targetPreview, result.targetWidth ?? plan.outputWidth, result.targetHeight ?? plan.outputHeight, current));
+    if (result.restoredPreview) paints.push(paintBlob($('#restored-preview'), result.restoredPreview, result.restoreWidth ?? plan.width, result.restoreHeight ?? plan.height, current));
   }
   await Promise.all(paints);
   if (current()) { $('#source-empty').hidden = true; renderStatus(entry, 'encode'); }
@@ -236,6 +278,8 @@ async function renderEncode(entry) {
 async function renderDecode(entry) {
   const token = ++state.decodePaint; const current = () => activeEntry('decode') === entry && token === state.decodePaint;
   $('#download-restored').disabled = !isReady(entry);
+  const restoredMime = entry?.result?.mime;
+  $('#download-restored').textContent = restoredMime === 'image/gif' || (!restoredMime && entry?.isGif) ? '下载还原 GIF' : '下载还原图像';
   $('#decode-empty').hidden = Boolean(isReady(entry));
   $('#decode-empty').textContent = entry?.label ?? '选择混淆图文件';
   $('#encoded-meta').textContent = entry?.width ? `${entry.file.name} · ${entry.width} × ${entry.height}` : '选择包含坐标信息的图像';
@@ -271,6 +315,7 @@ async function importFiles(files, kind) {
   selectEntry(entries[0], kind);
   for (const entry of entries) {
     try {
+      entry.isGif = isGif(new Uint8Array(await entry.file.slice(0, 6).arrayBuffer()));
       const bitmap = await createImageBitmap(entry.file);
       if (!state[kind].includes(entry)) { bitmap.close(); continue; }
       entry.width = bitmap.width; entry.height = bitmap.height;
@@ -288,6 +333,7 @@ function settingsChanged({ qualityOnly = false } = {}) {
   syncSettings(); const settings = readSettings();
   const entries = $('#unify-settings').checked ? state.encode : [activeEntry('encode')].filter(Boolean);
   for (const entry of entries) {
+    if (qualityOnly && (entry.isGif || animatedPreset(settings.preset))) { entry.settings = { ...settings }; continue; }
     if (JSON.stringify(entry.settings) === JSON.stringify(settings)) continue;
     const started = entry.started;
     let cache = qualityOnly ? entry.result ?? entry.cached : null;
@@ -313,11 +359,17 @@ async function processEntry(entry, kind) {
   let payload; let memory;
   try {
     if (kind === 'encode') {
-      const size = processingSize(entry.width, entry.height, settings); const plan = createPlan(size.width, size.height, processingOptions(settings));
-      memory = plan.outputWidth * plan.outputHeight * 24 + size.width * size.height * 12;
       const index = PRESETS.findIndex(preset => presetKey(preset) === settings.preset);
       if (index < 0) throw new Error('所选预设已删除，请重新选择。');
-      payload = { action: 'encode-file', file: entry.file, settings, target: state.presetImages[index], compactPreview: state.encode.length > 1, cached: entry.cached ? { raw: entry.cached.raw, plan: entry.cached.plan, boosted: entry.cached.boosted } : null };
+      const targetGif = state.presetGifBytes[index];
+      if (entry.isGif || targetGif) {
+        memory = Math.min(pool.memoryBudget, Math.max(128 * 1048576, entry.file.size * 24 + 64 * 1048576));
+        payload = { action: 'encode-file', file: entry.file, settings, target: state.presetImages[index], targetGif };
+      } else {
+        const size = processingSize(entry.width, entry.height, settings); const plan = createPlan(size.width, size.height, processingOptions(settings));
+        memory = plan.outputWidth * plan.outputHeight * 24 + size.width * size.height * 12;
+        payload = { action: 'encode-file', file: entry.file, settings, target: state.presetImages[index], compactPreview: state.encode.length > 1, cached: entry.cached ? { raw: entry.cached.raw, plan: entry.cached.plan, boosted: entry.cached.boosted } : null };
+      }
     } else { payload = { action: 'restore-file', file: entry.file }; memory = entry.width * entry.height * 12; }
     const result = await pool.run(payload, { signal: controller.signal, memory, onProgress: progress => {
       if (!current()) return;
@@ -325,6 +377,9 @@ async function processEntry(entry, kind) {
       renderRow(entry, kind); renderStatus(entry, kind);
     } });
     if (!current()) return;
+    if (kind === 'encode' && result.isGif) {
+      entry.size = { width: result.sourceWidth, height: result.sourceHeight, scale: Math.min(result.sourceWidth / entry.width, result.sourceHeight / entry.height), automatic: true };
+    }
     entry.result = result; entry.cached = null; entry.completedAt = Date.now(); entry.status = result.warning ? 'warning' : 'done'; entry.progress = 1;
     // Keep recent carriers for instant quality edits, with a fixed byte budget
     // so a long batch does not retain every enlarged, uncompressed image.
@@ -335,8 +390,8 @@ async function processEntry(entry, kind) {
       retained += cache.raw.size;
       if (retained > Math.min(pool.memoryBudget / 2, 128 * 1048576)) cache.raw = null;
     }
-    entry.label = kind === 'encode' ? result.warning ? '已生成 · 还原验证未通过' : '完成 · JPG 还原验证通过'
-      : `${result.plan.tileCount.toLocaleString()} 块已拼回 · 坐标验证通过 · ${result.plan.panels} 段自动拼接 · 已纠正 ${result.plan.corrected} 字节 · 恢复处理尺寸`;
+    entry.label = kind === 'encode' ? result.warning ? '已生成 · 还原验证未通过' : result.isGif ? `完成 · ${result.gifFrames} 帧 · 原图精确还原验证通过` : '完成 · JPG 还原验证通过'
+      : result.isGif ? `GIF ${result.originalBytes.toLocaleString()} 字节已精确还原 · ${result.plan.width} × ${result.plan.height}` : result.mime ? `原图 ${result.originalBytes.toLocaleString()} 字节已精确还原 · ${result.plan.width} × ${result.plan.height}` : `${result.plan.tileCount.toLocaleString()} 块已拼回 · 坐标验证通过 · ${result.plan.panels} 段自动拼接 · 已纠正 ${result.plan.corrected} 字节 · 恢复处理尺寸`;
   } catch (error) {
     if (!current() || error.name === 'AbortError') return;
     entry.status = 'error'; entry.label = error.message; entry.result = null;
@@ -365,6 +420,7 @@ async function downloadAll(kind) {
 
 async function downloadRawPng() {
   const entry = activeEntry('encode'); if (!isReady(entry)) return;
+  if (outputIsGif(entry)) return;
   const result = entry.result; const button = $('#download-png');
   button.disabled = true; button.textContent = '正在导出 PNG…';
   try {
@@ -411,16 +467,19 @@ function appendPreset(preset, index) {
 
 async function initializePresets() {
   const lastSelected = selectedPreset();
-  state.presetImages = await Promise.all(PRESETS.map(async preset => {
+  const loaded = await Promise.all(PRESETS.map(async preset => {
     const response = await fetch(preset.src); if (!response.ok) throw new Error(`无法加载预设图：${preset.name}`);
-    const bitmap = await createImageBitmap(await response.blob()); const canvas = bitmapCanvas(bitmap); bitmap.close();
-    const image = { width: canvas.width, height: canvas.height, data: canvasPixels(canvas) }; canvas.width = canvas.height = 0; return image;
+    const blob = await response.blob(); const bytes = preset.animated ? new Uint8Array(await blob.arrayBuffer()) : null;
+    const bitmap = await createImageBitmap(blob); const canvas = bitmapCanvas(bitmap); bitmap.close();
+    const image = { width: canvas.width, height: canvas.height, data: canvasPixels(canvas) }; canvas.width = canvas.height = 0; return { image, bytes };
   }));
+  state.presetImages = loaded.map(item => item.image); state.presetGifBytes = loaded.map(item => item.bytes);
   try {
     for (const record of await listPresets()) {
       const bitmap = await createImageBitmap(record.blob); const canvas = bitmapCanvas(bitmap); bitmap.close();
-      PRESETS.push({ id: record.id, name: record.name, filename: record.filename, src: URL.createObjectURL(record.blob), saved: true, record });
-      state.presetImages.push({ width: canvas.width, height: canvas.height, data: canvasPixels(canvas) }); canvas.width = canvas.height = 0;
+      PRESETS.push({ id: record.id, name: record.name, filename: record.filename, src: URL.createObjectURL(record.blob), saved: true, record, animated: record.blob.type === 'image/gif' });
+      state.presetImages.push({ width: canvas.width, height: canvas.height, data: canvasPixels(canvas) });
+      state.presetGifBytes.push(record.blob.type === 'image/gif' ? new Uint8Array(await record.blob.arrayBuffer()) : null); canvas.width = canvas.height = 0;
     }
   } catch { showToast('浏览器本地存储暂不可用，自定义预设仍可在本次使用。'); }
   const index = PRESETS.findIndex(preset => presetKey(preset) === lastSelected); renderPresets(index < 0 ? 0 : index);
@@ -433,7 +492,7 @@ async function removeCustomPreset(preset) {
   if (preset.saved) await deletePreset(preset.id);
   const index = PRESETS.indexOf(preset); if (index < 0) return;
   const selected = PRESETS[state.presetIndex]; const wasSelected = selected === preset;
-  const [image] = state.presetImages.splice(index, 1); PRESETS.splice(index, 1);
+  const [image] = state.presetImages.splice(index, 1); state.presetGifBytes.splice(index, 1); PRESETS.splice(index, 1);
   renderPresets(wasSelected ? 0 : PRESETS.indexOf(selected));
   for (const entry of state.encode) if (entry.settings.preset === preset.id) {
     cancelEntry(entry); entry.settings.preset = presetKey(PRESETS[0]); entry.result = entry.cached = null; entry.status = 'idle'; entry.label = '预设已删除，已切换默认预设';
@@ -443,16 +502,17 @@ async function removeCustomPreset(preset) {
   showToast(`已删除「${preset.name}」`, false, { label: '撤销', run: async () => {
     if (preset.saved) await savePreset(preset.record);
     if (PRESETS.some(item => item.id === preset.id)) return;
-    preset.src = URL.createObjectURL(preset.record.blob); PRESETS.push(preset); state.presetImages.push(image); renderPresets(wasSelected ? PRESETS.length - 1 : state.presetIndex);
+    preset.src = URL.createObjectURL(preset.record.blob); PRESETS.push(preset); state.presetImages.push(image); state.presetGifBytes.push(preset.animated ? new Uint8Array(await preset.record.blob.arrayBuffer()) : null); renderPresets(wasSelected ? PRESETS.length - 1 : state.presetIndex);
     if (wasSelected) settingsChanged();
   } });
 }
 
 async function loadCustomPreset(file) {
   if (!file?.type.startsWith('image/')) throw new Error('请选择有效的预设图片。');
+  const animated = isGif(new Uint8Array(await file.slice(0, 6).arrayBuffer()));
   const bitmap = await createImageBitmap(file); const scale = Math.min(1, 1536 / Math.max(bitmap.width, bitmap.height));
   const canvas = bitmapCanvas(bitmap, Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale))); bitmap.close();
-  const image = { width: canvas.width, height: canvas.height, data: canvasPixels(canvas) }; const blob = await imageBlob(canvas); canvas.width = canvas.height = 0;
+  const image = { width: canvas.width, height: canvas.height, data: canvasPixels(canvas) }; const blob = animated ? file : await imageBlob(canvas); canvas.width = canvas.height = 0;
   const hash = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
   const id = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
   const existing = PRESETS.findIndex(preset => preset.id === id);
@@ -460,8 +520,8 @@ async function loadCustomPreset(file) {
   const record = { id, name: file.name.replace(/\.[^.]+$/, '') || '自定义预设', filename: file.name, blob, createdAt: Date.now() };
   let saved = true;
   try { await savePreset(record); } catch { saved = false; showToast('本地保存未成功，这张预设仍可在本次使用。', true); }
-  const preset = { id, name: record.name, filename: file.name, src: URL.createObjectURL(blob), saved, record };
-  PRESETS.push(preset); state.presetImages.push(image); appendPreset(preset, PRESETS.length - 1); setPreset(PRESETS.length - 1);
+  const preset = { id, name: record.name, filename: file.name, src: URL.createObjectURL(blob), saved, record, animated };
+  PRESETS.push(preset); state.presetImages.push(image); state.presetGifBytes.push(animated ? new Uint8Array(await blob.arrayBuffer()) : null); appendPreset(preset, PRESETS.length - 1); setPreset(PRESETS.length - 1);
 }
 
 for (const [inputId, pickerId, kind] of [['source-file', 'source-picker', 'encode'], ['encoded-file', 'encoded-picker', 'decode']]) {

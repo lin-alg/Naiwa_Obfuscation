@@ -3,8 +3,10 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, writeFile, open, readFile, stat } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gunzipSync } from 'node:zlib';
 import { artifactDirectory, artifactEnvironment } from './artifact-paths.mjs';
 import { decode, png } from './image-io.mjs';
+import { embeddedImagePayload, parseGif } from '../gif-codec.mjs';
 
 const chrome = process.env.CHROME_EXECUTABLE ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const temporaryRoot = await artifactDirectory('browser');
@@ -103,7 +105,7 @@ async function waitFor(expression, timeoutMs = 120000) {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   const diagnostic = await evaluate(`({ presets:document.querySelectorAll('.preset-option').length, result:document.querySelector('#result-summary')?.textContent, toast:document.querySelector('#toast')?.textContent, custom:document.querySelector('#custom-preset-hint')?.textContent })`);
-  throw new Error(`Timed out waiting for: ${expression}; ${JSON.stringify(diagnostic)}`);
+  throw new Error(`Timed out waiting for: ${expression}; ${JSON.stringify({ ...diagnostic, pageErrors })}`);
 }
 
 async function setInputFile(selector, path, append = false) {
@@ -128,7 +130,7 @@ try {
   await command('Page.enable');
   await command('DOM.enable');
   await command('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads, eventsEnabled: true });
-  await waitFor('document.querySelectorAll(".preset-option").length === 4');
+  await waitFor('document.querySelectorAll(".preset-option").length === 6');
   await waitFor('!document.querySelector("#custom-preset-picker").disabled');
   for (const width of [320, 768]) {
     await command('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: width < 500 });
@@ -307,23 +309,23 @@ try {
   await waitFor('document.querySelector("#source-preview").width === 1638 && document.querySelector("#source-preview").height === 1024');
   const customPath = await makeFixture('custom-transparent.png', 128, 128, true);
   await setInputFile('#custom-preset-file', customPath);
-  await waitFor('document.querySelectorAll(".preset-option").length === 5 && document.querySelectorAll(".preset-option")[4].getAttribute("aria-checked") === "true"');
+   await waitFor('document.querySelectorAll(".preset-option").length === 7 && document.querySelectorAll(".preset-option")[6].getAttribute("aria-checked") === "true"');
   await evaluate('document.querySelector("#encode-button").click()');
   await waitFor('document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
   const transparentPadding = await evaluate('document.querySelector("#target-preview").getContext("2d").getImageData(0,0,1,1).data[3]');
   if (transparentPadding !== 0) throw new Error('Preset padding must retain transparent alpha');
   await setInputFile('#custom-preset-file', customPath);
   await waitFor('document.querySelector("#toast").textContent.includes("已经在")');
-  if (await evaluate('document.querySelectorAll(".preset-option").length') !== 5) throw new Error('Duplicate preset was saved twice');
+   if (await evaluate('document.querySelectorAll(".preset-option").length') !== 7) throw new Error('Duplicate preset was saved twice');
   await command('Page.reload', { ignoreCache: true });
-  await waitFor('document.querySelectorAll(".preset-option").length === 5 && !document.querySelector("#custom-preset-picker").disabled && document.querySelectorAll(".preset-option")[4].getAttribute("aria-checked") === "true"');
+   await waitFor('document.querySelectorAll(".preset-option").length === 7 && !document.querySelector("#custom-preset-picker").disabled && document.querySelectorAll(".preset-option")[6].getAttribute("aria-checked") === "true"');
   if (!await evaluate(`document.querySelector('#custom-preset-hint').textContent.includes('已保存在')`)) throw new Error('Custom preset was not restored from local storage');
   await evaluate('document.querySelector(".preset-remove").click()');
-  await waitFor('document.querySelectorAll(".preset-option").length === 4 && document.querySelector(".toast-action")');
+   await waitFor('document.querySelectorAll(".preset-option").length === 6 && document.querySelector(".toast-action")');
   await evaluate('document.querySelector(".toast-action").click()');
-  await waitFor('document.querySelectorAll(".preset-option").length === 5 && document.querySelectorAll(".preset-option")[4].getAttribute("aria-checked") === "true"');
+   await waitFor('document.querySelectorAll(".preset-option").length === 7 && document.querySelectorAll(".preset-option")[6].getAttribute("aria-checked") === "true"');
   await command('Page.reload', { ignoreCache: true });
-  await waitFor('document.querySelectorAll(".preset-option").length === 5 && !document.querySelector("#custom-preset-picker").disabled');
+   await waitFor('document.querySelectorAll(".preset-option").length === 7 && !document.querySelector("#custom-preset-picker").disabled');
   console.log('preset persistence passed: saved, deduplicated, restored after reload, removed, undo saved and survived another reload');
   await setInputFile('#source-file', smallPath);
   await waitFor('document.querySelector("#source-preview").width === 1638');
@@ -357,7 +359,7 @@ try {
   if (!await evaluate('document.querySelector("#decode-preview").width === 1280 && document.querySelector("#decode-preview").height === 800')) throw new Error('4x carrier restored to the wrong source dimensions');
   console.log('4px / 4x JPG download and automatic restoration passed: 5120x3200 -> 1280x800');
   await command('Page.reload', { ignoreCache: true });
-  await waitFor('document.querySelectorAll(".preset-option").length === 5 && !document.querySelector("#custom-preset-picker").disabled');
+   await waitFor('document.querySelectorAll(".preset-option").length === 7 && !document.querySelector("#custom-preset-picker").disabled');
   const panoramaPath = await makeFixture('panorama-source.png', 1200, 160);
   await setInputFile('#source-file', panoramaPath);
   await waitFor('document.querySelector("#source-preview").width === 2960 && document.querySelector("#source-preview").height === 395');
@@ -366,9 +368,9 @@ try {
   await screenshot('naiwa-browser-panorama.png');
   console.log(`sizing and custom presets passed: large 4000x2000 -> 2960x1480; manual 50% -> 2000x1000; small 160x100 -> 1638x1024; panorama 1200x160 -> 2960x395, 7 panels, final JPG restored; padding alpha=${transparentPadding}`);
   await evaluate('document.querySelector(".preset-remove").click()');
-  await waitFor('document.querySelectorAll(".preset-option").length === 4');
+   await waitFor('document.querySelectorAll(".preset-option").length === 6');
   await command('Page.reload', { ignoreCache: true });
-  await waitFor('document.querySelectorAll(".preset-option").length === 4 && !document.querySelector("#custom-preset-picker").disabled');
+   await waitFor('document.querySelectorAll(".preset-option").length === 6 && !document.querySelector("#custom-preset-picker").disabled');
   if (await evaluate('document.querySelectorAll(".preset-remove").length')) throw new Error('Deleted preset returned after reload');
   console.log('permanent preset deletion passed after reload');
 
@@ -450,6 +452,89 @@ try {
   await evaluate(`document.querySelectorAll('#source-list .batch-remove').forEach(button=>button.click());document.querySelectorAll('#decode-list .batch-remove').forEach(button=>button.click())`);
   if (!await evaluate(`document.querySelector('#encode-button').disabled&&document.querySelector('#decode-button').disabled&&document.querySelector('#preview-area').hidden`)) throw new Error('Removing the final batch entry did not reset the view');
   console.log('batch passed: unified/independent presets and settings, cancellation, progress, previews, single downloads, JPG/PNG ZIPs, partial failure and 320/390/768px layouts');
+
+  const gifInput = fileURLToPath(new URL('../test/animated/2.gif', import.meta.url));
+  const gifOriginal = await readFile(gifInput); const beforeGifDownload = finishedDownloads.length;
+  await setInputFile('#source-file', gifInput);
+  await waitFor(`document.querySelector('#source-list .batch-item')?.dataset.status==='idle'&&document.querySelector('#source-meta').textContent.includes('2.gif')`);
+  await evaluate(`document.querySelector('.preset-option[data-index="4"]').click();document.querySelector('#advanced-settings').open=true;document.querySelector('#encode-button').click()`);
+  await waitFor(`document.querySelector('#result-summary').textContent.includes('原图精确还原验证通过')`, 240000);
+  const gifMetrics = await evaluate(`({summary:document.querySelector('#result-summary').textContent,preset:document.querySelector('#preset-score').textContent,dimensions:document.querySelector('#mosaic-preview').width+'x'+document.querySelector('#mosaic-preview').height,animated:!!document.querySelector('[data-panel="mosaic"] .preview-animation:not([hidden])')&&document.querySelector('[data-panel="mosaic"] .preview-animation').naturalWidth>0,animatedDimensions:document.querySelector('[data-panel="mosaic"] .preview-animation')?.naturalWidth+'x'+document.querySelector('[data-panel="mosaic"] .preview-animation')?.naturalHeight,qualityDisabled:document.querySelector('#jpg-quality').disabled,carrierDisabled:document.querySelector('#carrier-scale').disabled,bytes:Number(document.querySelector('#output-size').dataset.bytes)})`);
+  const originalGif = parseGif(gifOriginal); const selectedGifPreset = parseGif(await readFile(fileURLToPath(new URL('../images/animated/1.gif', import.meta.url)))); const gifDownload = Date.now();
+  await evaluate(`document.querySelector('#download-button').click()`);
+  while (finishedDownloads.length < beforeGifDownload + 1 && Date.now() - gifDownload < 20000) await new Promise(resolve => setTimeout(resolve, 100));
+  if (finishedDownloads.length < beforeGifDownload + 1) throw new Error('Obfuscated GIF download did not complete');
+  const gifOutputPath = join(downloads, '2-obfuscated.gif'); const gifOutput = await readFile(gifOutputPath); const encodedGif = parseGif(gifOutput);
+  const presetScore = Number(gifMetrics.preset.match(/SSIM ([0-9.]+)/)?.[1]);
+  const followsGifPreset = encodedGif.duration === selectedGifPreset.duration && encodedGif.loop === selectedGifPreset.loop;
+  if (!gifMetrics.animated || !gifMetrics.qualityDisabled || !gifMetrics.carrierDisabled || !followsGifPreset || gifMetrics.dimensions !== `${encodedGif.width}x${encodedGif.height}` || gifMetrics.animatedDimensions !== gifMetrics.dimensions || encodedGif.frames.length !== originalGif.frames.length || encodedGif.frames.length !== 50 || !(presetScore >= 0.5)) throw new Error(`GIF frame alignment, preset timing, preview or similarity failed: ${JSON.stringify({ ...gifMetrics, followsGifPreset, outputDuration: encodedGif.duration, targetDuration: selectedGifPreset.duration, outputLoop: encodedGif.loop, targetLoop: selectedGifPreset.loop })}`);
+  if (gifMetrics.bytes !== gifOutput.length || gifOutput.length > gifOriginal.length * 3) throw new Error(`GIF output size exceeded the 3x budget or displayed size differed: ${JSON.stringify({ metrics: gifMetrics, actual: gifOutput.length, input: gifOriginal.length })}`);
+  await setInputFile('#encoded-file', gifOutputPath);
+  await waitFor(`document.querySelector('#decode-list .batch-item')?.dataset.status==='idle'`);
+  await evaluate(`document.querySelector('[data-view="decode"]').click();document.querySelector('#decode-button').click()`);
+  await waitFor(`document.querySelector('#decode-message').textContent.includes('GIF')&&document.querySelector('#decode-message').textContent.includes('精确还原')`);
+  const beforeRestoredGifDownload = finishedDownloads.length; await evaluate(`document.querySelector('#download-restored').click()`);
+  const restoredGifDeadline = Date.now();
+  while (finishedDownloads.length < beforeRestoredGifDownload + 1 && Date.now() - restoredGifDeadline < 20000) await new Promise(resolve => setTimeout(resolve, 100));
+  const restoredGif = await readFile(join(downloads, '2-obfuscated-restored.gif'));
+  if (!restoredGif.equals(gifOriginal)) throw new Error('Restored GIF bytes differ from the uploaded original');
+  console.log(`GIF encode/restore passed: ${JSON.stringify({ ...gifMetrics, inputBytes: gifOriginal.length, actualBytes: gifOutput.length, ratio: Number((gifOutput.length / gifOriginal.length).toFixed(2)), frames: encodedGif.frames.length, exactRestore: restoredGif.equals(gifOriginal) })}`);
+  await evaluate(`document.querySelector('.preset-option[data-index="0"]').click();document.querySelector('#encode-button').click()`);
+  await waitFor(`document.querySelector('#preset-score').textContent.includes('对齐 1 帧')&&document.querySelector('#result-summary').textContent.includes('原图精确还原验证通过')`, 240000);
+  if (!await evaluate(`document.querySelector('#preset-score').textContent.includes('帧平均预设 SSIM')`)) throw new Error('GIF encoding with a static preset failed');
+  const staticTiming = await evaluate(`(async()=>{const image=document.querySelector('[data-panel="mosaic"] .preview-animation');const {parseGif}=await import('./gif-codec.mjs');const gif=parseGif(new Uint8Array(await (await fetch(image.src)).arrayBuffer()));return {duration:gif.duration,loop:gif.loop,frames:gif.frames.length}})()`);
+  if (staticTiming.duration !== originalGif.duration || staticTiming.loop !== originalGif.loop) throw new Error(`Static preset should preserve source animation timing and loop behavior: ${JSON.stringify(staticTiming)}`);
+  console.log('GIF encoding with a static image preset passed');
+  const gifSamples = [];
+  for (const [sample, preset] of [['1.gif', 5], ['3.gif', 4]]) {
+    const inputPath = fileURLToPath(new URL(`../test/animated/${sample}`, import.meta.url));
+    const inputBytes = await readFile(inputPath); const sourceGif = parseGif(inputBytes); const beforeDownload = finishedDownloads.length;
+    await setInputFile('#source-file', inputPath);
+    await waitFor(`document.querySelector('#source-list .batch-item')?.dataset.status==='idle'&&document.querySelector('#source-meta').textContent.includes('${sample}')`);
+    await evaluate(`document.querySelector('.preset-option[data-index="${preset}"]').click();document.querySelector('#encode-button').click()`);
+    await waitFor(`document.querySelector('#result-summary').textContent.includes('原图精确还原验证通过')`, 240000);
+    const resultMetrics = await evaluate(`({preset:document.querySelector('#preset-score').textContent,bytes:Number(document.querySelector('#output-size').dataset.bytes),frames:Number(document.querySelector('#result-summary').textContent.match(/GIF (\\d+) 帧/)[1])})`);
+    await evaluate(`document.querySelector('#download-button').click()`);
+    const downloadDeadline = Date.now();
+    while (finishedDownloads.length < beforeDownload + 1 && Date.now() - downloadDeadline < 20000) await new Promise(resolve => setTimeout(resolve, 100));
+    const outputPath = join(downloads, `${sample.replace('.gif', '')}-obfuscated.gif`); const outputBytes = await readFile(outputPath); const outputGif = parseGif(outputBytes);
+    const outline = Number(resultMetrics.preset.match(/SSIM ([0-9.]+)/)?.[1]); const ratio = outputBytes.length / inputBytes.length;
+    const targetPath = fileURLToPath(new URL(`../images/animated/${preset === 4 ? '1' : '2'}.gif`, import.meta.url));
+    const targetGif = parseGif(await readFile(targetPath));
+    const followsPreset = outputGif.duration === targetGif.duration && outputGif.loop === targetGif.loop;
+    if (outputGif.frames.length !== sourceGif.frames.length || !followsPreset || resultMetrics.frames !== sourceGif.frames.length || resultMetrics.bytes !== outputBytes.length || ratio > 3 || outline < 0.5) {
+      throw new Error(`GIF sample ${sample} exceeded quality, preset timing, frame or size limits: ${JSON.stringify({ ...resultMetrics, actualBytes: outputBytes.length, inputBytes: inputBytes.length, ratio, outline, followsPreset, outputDuration: outputGif.duration, targetDuration: targetGif.duration })}`);
+    }
+    gifSamples.push({ sample, frames: outputGif.frames.length, inputBytes: inputBytes.length, outputBytes: outputBytes.length, ratio: Number(ratio.toFixed(2)), outline, duration: outputGif.duration, presetDuration: targetGif.duration });
+  }
+  console.log(`additional GIF samples passed: ${JSON.stringify(gifSamples)}`);
+
+  const staticOriginal = await readFile(smallPath); const beforeStillGifDownload = finishedDownloads.length;
+  await setInputFile('#source-file', smallPath);
+  await waitFor(`document.querySelector('#source-list .batch-item')?.dataset.status==='idle'&&document.querySelector('#source-meta').textContent.includes('small-source.png')`);
+  await evaluate(`document.querySelector('.preset-option[data-index="4"]').click();document.querySelector('#balance').value=50;document.querySelector('#balance').dispatchEvent(new Event('input'));document.querySelector('#encode-button').click()`);
+  await waitFor(`document.querySelector('#result-summary').textContent.includes('GIF 100 帧')&&document.querySelector('#result-summary').textContent.includes('原图精确还原验证通过')`, 240000);
+  const stillGifMetrics = await evaluate(`({preset:document.querySelector('#preset-score').textContent,options:document.querySelector('#applied-options').textContent,bytes:Number(document.querySelector('#output-size').dataset.bytes),animated:!!document.querySelector('[data-panel="mosaic"] .preview-animation:not([hidden])'),restored:document.querySelector('#restored-score').textContent})`);
+  await evaluate(`document.querySelector('#download-button').click()`);
+  const stillGifDownload = Date.now();
+  while (finishedDownloads.length < beforeStillGifDownload + 1 && Date.now() - stillGifDownload < 20000) await new Promise(resolve => setTimeout(resolve, 100));
+  const stillGifPath = join(downloads, 'small-source-obfuscated.gif'); const stillGifBytes = await readFile(stillGifPath); const stillGif = parseGif(stillGifBytes);
+  const stillPayload = embeddedImagePayload(stillGif); const targetStillGif = parseGif(await readFile(fileURLToPath(new URL('../images/animated/1.gif', import.meta.url))));
+  const stillPresetScore = Number(stillGifMetrics.preset.match(/SSIM ([0-9.]+)/)?.[1]);
+  if (stillPayload?.mime !== 'image/png' || !gunzipSync(stillPayload.compressed).equals(staticOriginal) || stillGif.duration !== targetStillGif.duration || stillGif.loop !== targetStillGif.loop || stillGif.frames.length !== targetStillGif.frames.length || !stillGifMetrics.animated || !stillGifMetrics.restored.includes('静态图') || !stillGifMetrics.options.includes('细节 75%') || stillPresetScore < 0.5) {
+    throw new Error(`Static source to animated preset GIF failed: ${JSON.stringify({ ...stillGifMetrics, frames: stillGif.frames.length, duration: stillGif.duration, targetDuration: targetStillGif.duration, loop: stillGif.loop, targetLoop: targetStillGif.loop, mime: stillPayload?.mime })}`);
+  }
+  const beforeStillRestoreDownload = finishedDownloads.length;
+  await setInputFile('#encoded-file', stillGifPath);
+  await waitFor(`document.querySelector('#decode-list .batch-item')?.dataset.status==='idle'`);
+  await evaluate(`document.querySelector('[data-view="decode"]').click();document.querySelector('#decode-button').click()`);
+  await waitFor(`document.querySelector('#decode-message').textContent.includes('精确还原')`);
+  await evaluate(`document.querySelector('#download-restored').click()`);
+  const stillRestoreDeadline = Date.now();
+  while (finishedDownloads.length < beforeStillRestoreDownload + 1 && Date.now() - stillRestoreDeadline < 20000) await new Promise(resolve => setTimeout(resolve, 100));
+  const restoredStatic = await readFile(join(downloads, 'small-source-obfuscated-restored.png'));
+  if (!restoredStatic.equals(staticOriginal)) throw new Error('Static image embedded in animated GIF did not restore byte-for-byte');
+  console.log(`static source / animated preset passed: ${JSON.stringify({ ...stillGifMetrics, frames: stillGif.frames.length, originalBytes: staticOriginal.length, outputBytes: stillGifBytes.length, exactRestore: true })}`);
 
   if (process.argv.includes('--reports')) {
     await command('Page.navigate', { url: 'http://127.0.0.1:4173/reports/compare.html' });

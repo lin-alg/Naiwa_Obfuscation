@@ -72,7 +72,7 @@ export function createPlan(width, height, options = {}) {
   const version = options.version ?? VERSION;
   const tileSize = Number(options.tileSize ?? 8);
   const requestedScale = Number(options.scale ?? 2);
-  const scale = Math.min(width, height) < 64 ? Math.max(3, requestedScale) : requestedScale;
+  const scale = options.noWatermark || Math.min(width, height) >= 64 ? requestedScale : Math.max(3, requestedScale);
   const colorAdapt = options.colorAdapt !== false;
   const colorGain = colorAdapt ? Number(options.colorGain ?? 0.75) : 1;
   if (![1, 0.75, 0.5, 0.25].includes(colorGain)) throw new Error('块内细节保留系数应为 100%、75%、50% 或 25%。');
@@ -106,8 +106,8 @@ export function createPlan(width, height, options = {}) {
   const codeBlocks = Math.ceil(payloadBytes / RS_DATA);
   const encodedBytes = codeBlocks * (RS_DATA + RS_PARITY);
   const blockCount = outputWidth * outputHeight / 64;
-  const frequencyCount = [8, 16, 24, 32, 40, 48, 56, 63].find((count) => count * blockCount >= encodedBytes * 8 + HEADER_CARRIERS);
-  if (!frequencyCount) throw new Error('图片太小，无法容纳细分块坐标与纠错信息；请换用更大图片。');
+  const frequencyCount = options.noWatermark ? 0 : [8, 16, 24, 32, 40, 48, 56, 63].find((count) => count * blockCount >= encodedBytes * 8 + HEADER_CARRIERS);
+  if (!options.noWatermark && !frequencyCount) throw new Error('图片太小，无法容纳细分块坐标与纠错信息；请换用更大图片。');
   return { version, width, height, outputWidth, outputHeight, tileSize, outputTileSize, scale, pixelScale, colorAdapt, colorGain, panels, columns, rows, tileCount, coordinateBits, payloadBits, payloadBytes, codeBlocks, encodedBytes, blockCount, frequencyCount };
 }
 
@@ -557,11 +557,13 @@ export async function encodeImage(source, preset, options = {}) {
     writeTile(padded, output, mapping[i], i, plan);
     if (plan.colorAdapt) colorMeans.set(adaptTile(output, target.data, i, plan), i * 3);
   }
-  const payload = coordinateBytes(mapping, colorMeans, plan);
-  const header = makeHeader(plan, step, crc32(payload));
   timing('adapt');
-  await watermark(output, plan, step, header, protectPayload(payload, plan), false, options.onProgress);
-  timing('watermark');
+  if (!options.noWatermark) {
+    const payload = coordinateBytes(mapping, colorMeans, plan);
+    const header = makeHeader(plan, step, crc32(payload));
+    await watermark(output, plan, step, header, protectPayload(payload, plan), false, options.onProgress);
+    timing('watermark');
+  }
   options.onProgress?.({ label: '计算图像相似度', fraction: 0.92 });
   const resemblance = options.skipSimilarity ? null : presetSimilarity(output, target.data, plan.outputWidth, plan.outputHeight);
   timing('similarity');

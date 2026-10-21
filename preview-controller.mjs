@@ -7,11 +7,15 @@ export function initializePreviews() {
     if (!zooms.has(viewport)) zooms.set(viewport, { factor: null });
     return zooms.get(viewport);
   };
+  const visual = viewport => viewport?.querySelector('.preview-animation:not([hidden])') ?? viewport?.querySelector('canvas:not([hidden])');
+  const dimensions = element => element instanceof HTMLCanvasElement
+    ? { width: element.width, height: element.height }
+    : { width: element?.naturalWidth || element?.width || 0, height: element?.naturalHeight || element?.height || 0 };
   const modeViewport = () => $(`[data-panel="${mode === 'restored' ? 'restored' : 'mosaic'}"] .canvas-viewport`);
   function fitScale(panel) {
-    const canvas = panel.querySelector('canvas'); const viewport = panel.querySelector('.canvas-viewport');
-    if (!canvas?.width || !canvas?.height || !viewport?.clientWidth || !viewport?.clientHeight) return 1;
-    return Math.min(viewport.clientWidth / canvas.width, viewport.clientHeight / canvas.height);
+    const viewport = panel.querySelector('.canvas-viewport'); const image = visual(viewport); const size = dimensions(image);
+    if (!size.width || !size.height || !viewport?.clientWidth || !viewport?.clientHeight) return 1;
+    return Math.min(viewport.clientWidth / size.width, viewport.clientHeight / size.height);
   }
   function readout(viewport) {
     if (!viewport) return;
@@ -23,16 +27,16 @@ export function initializePreviews() {
     const panels = target ? [target.closest('.preview-panel')].filter(Boolean)
       : [...document.querySelectorAll('.preview-panel')].filter(panel => panel.getClientRects().length && !panel.hidden && getComputedStyle(panel).display !== 'none');
     for (const panel of panels) {
-      const canvas = panel.querySelector('canvas'); const viewport = panel.querySelector('.canvas-viewport'); const stage = panel.querySelector('.canvas-stage');
-      if (!canvas?.width || !canvas?.height || !viewport || !stage) continue;
+      const viewport = panel.querySelector('.canvas-viewport'); const image = visual(viewport); const stage = panel.querySelector('.canvas-stage'); const size = dimensions(image);
+      if (!size.width || !size.height || !viewport || !stage) continue;
       const scale = zoomState(viewport).factor ?? fitScale(panel);
-      const width = Math.max(1, canvas.width * scale); const height = Math.max(1, canvas.height * scale);
-      canvas.style.width = `${width}px`; canvas.style.height = `${height}px`;
+      const width = Math.max(1, size.width * scale); const height = Math.max(1, size.height * scale);
+      image.style.width = `${width}px`; image.style.height = `${height}px`;
       stage.style.width = `${Math.max(viewport.clientWidth, width)}px`; stage.style.height = `${Math.max(viewport.clientHeight, height)}px`;
     }
     if (anchor) {
-      const { viewport, canvas, x, y, imageX, imageY } = anchor;
-      const view = viewport.getBoundingClientRect(); const rect = canvas.getBoundingClientRect(); const scale = rect.width / canvas.width;
+      const { viewport, image, x, y, imageX, imageY } = anchor; const size = dimensions(image);
+      const view = viewport.getBoundingClientRect(); const rect = image.getBoundingClientRect(); const scale = rect.width / size.width;
       viewport.scrollLeft = rect.left - view.left + viewport.scrollLeft + imageX * scale - x;
       viewport.scrollTop = rect.top - view.top + viewport.scrollTop + imageY * scale - y;
     }
@@ -45,13 +49,13 @@ export function initializePreviews() {
     }
   }
   function change(direction, viewport, clientX, clientY) {
-    const panel = viewport?.closest('.preview-panel'); const canvas = viewport?.querySelector('canvas');
-    if (!panel || !canvas?.width || !viewport.clientWidth || !viewport.clientHeight) return;
+    const panel = viewport?.closest('.preview-panel'); const image = visual(viewport); const size = dimensions(image);
+    if (!panel || !size.width || !viewport.clientWidth || !viewport.clientHeight) return;
     if (!viewport.closest('.decode-preview')) activeViewport = viewport;
-    const view = viewport.getBoundingClientRect(); const rect = canvas.getBoundingClientRect(); const scale = rect.width / canvas.width;
+    const view = viewport.getBoundingClientRect(); const rect = image.getBoundingClientRect(); const scale = rect.width / size.width;
     const x = Math.max(0, Math.min(viewport.clientWidth, (clientX ?? view.left + view.width / 2) - view.left));
     const y = Math.max(0, Math.min(viewport.clientHeight, (clientY ?? view.top + view.height / 2) - view.top));
-    const anchor = { viewport, canvas, x, y, imageX: Math.max(0, Math.min(canvas.width, (x - (rect.left - view.left)) / scale)), imageY: Math.max(0, Math.min(canvas.height, (y - (rect.top - view.top)) / scale)) };
+    const anchor = { viewport, image, x, y, imageX: Math.max(0, Math.min(size.width, (x - (rect.left - view.left)) / scale)), imageY: Math.max(0, Math.min(size.height, (y - (rect.top - view.top)) / scale)) };
     const current = zoomState(viewport).factor ?? fitScale(panel);
     zoomState(viewport).factor = Math.max(0.02, Math.min(8, current * (direction > 0 ? 1.15 : 1 / 1.15)));
     apply(viewport, anchor);
@@ -72,13 +76,13 @@ export function initializePreviews() {
   }));
   document.querySelectorAll('.canvas-viewport').forEach(viewport => {
     viewport.addEventListener('wheel', event => {
-      if (!viewport.querySelector('canvas')?.width) return;
+      if (!dimensions(visual(viewport)).width) return;
       event.preventDefault(); change(event.deltaY < 0 ? 1 : -1, viewport, event.clientX, event.clientY);
     }, { passive: false });
     let drag = null;
     viewport.addEventListener('pointerenter', () => { if (!viewport.closest('.decode-preview')) { activeViewport = viewport; readout(viewport); } });
     viewport.addEventListener('pointerdown', event => {
-      if (event.pointerType !== 'mouse' || event.button !== 0 || !viewport.querySelector('canvas')?.width) return;
+      if (event.pointerType !== 'mouse' || event.button !== 0 || !dimensions(visual(viewport)).width) return;
       drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
       viewport.setPointerCapture(event.pointerId); viewport.classList.add('is-panning'); event.preventDefault();
     });
