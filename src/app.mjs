@@ -10,11 +10,11 @@ import { isGif } from './gif-codec.mjs';
 const $ = selector => document.querySelector(selector);
 const PRESETS = [
   { name: '奶蛙', src: './assets/images/static/%E5%A5%B6%E8%9B%99.png' },
-  { name: '鼠蛙', src: './assets/images/static/naishu.png' },
-  { name: '蛙狗', src: './assets/images/static/naigou.png' },
-  { name: '蛙蛋', src: './assets/images/static/naidan.png' },
-  { name: '奶蛙 GIF', src: './assets/images/animated/1.gif', animated: true },
-  { name: '鼠蛙 GIF', src: './assets/images/animated/2.gif', animated: true },
+  { name: '奶鼠', src: './assets/images/static/naishu.png' },
+  { name: '奶狗', src: './assets/images/static/naigou.png' },
+  { name: '奶蛋', src: './assets/images/static/naidan.png' },
+  { name: '奶蛙翻滚笑', src: './assets/images/animated/1.gif', animated: true },
+  { name: '奶蛙的救赎', src: './assets/images/animated/2.gif', animated: true },
 ];
 const state = { encode: [], decode: [], activeEncode: null, activeDecode: null, presetIndex: 0, presetImages: [], presetGifBytes: [], presetsReady: false, settingsTouched: new Set(), encodePaint: 0, decodePaint: 0 };
 const pool = new WorkerPool();
