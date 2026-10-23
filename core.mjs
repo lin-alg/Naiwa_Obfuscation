@@ -107,7 +107,7 @@ export function createPlan(width, height, options = {}) {
   const encodedBytes = codeBlocks * (RS_DATA + RS_PARITY);
   const blockCount = outputWidth * outputHeight / 64;
   const frequencyCount = options.noWatermark ? 0 : [8, 16, 24, 32, 40, 48, 56, 63].find((count) => count * blockCount >= encodedBytes * 8 + HEADER_CARRIERS);
-  if (!options.noWatermark && !frequencyCount) throw new Error('图片太小，无法容纳细分块坐标与纠错信息；请换用更大图片。');
+  if (!options.noWatermark && !frequencyCount) throw new Error('图片尺寸太小，无法生成可还原的混淆图。请换一张更大的图片，或调整分块大小。');
   return { version, width, height, outputWidth, outputHeight, tileSize, outputTileSize, scale, pixelScale, colorAdapt, colorGain, panels, columns, rows, tileCount, coordinateBits, payloadBits, payloadBytes, codeBlocks, encodedBytes, blockCount, frequencyCount };
 }
 
@@ -312,11 +312,11 @@ function makeHeader(plan, step, checksum) {
 function parseHeader(bytes, width, height) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (bytes[0] !== 0x4e || bytes[1] !== 0x57 || ![5, VERSION].includes(bytes[2]) || view.getUint32(20, true) !== crc32(bytes.subarray(0, 20))) {
-    throw new Error('没有找到有效的新版 Naiwa 坐标信息；文件可能被缩放、裁切或过度压缩。');
+    throw new Error('没有找到可用的还原信息。这张图可能不是奶蛙混淆图，或已被缩放、裁切或压缩。');
   }
   const plan = createPlan(view.getUint16(6, true), view.getUint16(8, true), { version: bytes[2], tileSize: bytes[3], scale: bytes[18] / (bytes[2] >= 6 ? 2 : 1), panels: (bytes[19] >> 3) + 1, colorAdapt: Boolean(bytes[19] & 1), colorGain: [1, 0.75, 0.5, 0.25][(bytes[19] >> 1) & 3] });
   if (plan.outputWidth !== width || plan.outputHeight !== height || plan.frequencyCount !== bytes[5] || plan.payloadBytes !== view.getUint32(14, true) || bytes[4] < 4 || bytes[4] > 96) {
-    throw new Error('图像尺寸或坐标参数校验失败。');
+    throw new Error('混淆图信息不完整，无法还原。');
   }
   return { plan, step: bytes[4], checksum: view.getUint32(10, true) };
 }
@@ -497,7 +497,7 @@ async function watermark(data, plan, step, header, payload, read, onProgress) {
       }
     }
     if ((index & 4095) === 4095) {
-      onProgress?.({ label: read ? '读取纠错坐标' : '写入纠错坐标', fraction: read ? 0.05 + 0.5 * (index + 1) / plan.blockCount : 0.45 + 0.45 * (index + 1) / plan.blockCount });
+      onProgress?.({ label: read ? '读取还原信息' : '保存还原信息', fraction: read ? 0.05 + 0.5 * (index + 1) / plan.blockCount : 0.45 + 0.45 * (index + 1) / plan.blockCount });
       await pause();
     }
   }
@@ -515,7 +515,7 @@ function readHeaderVersion(image, version) {
     const count = Math.min(blockCount, HEADER_CARRIERS - Math.floor(slot / blockCount) * blockCount);
     const block = version >= 6 ? Math.floor((slot % blockCount) * blockCount / count) : slot % blockCount;
     const frequency = Math.floor(slot / blockCount);
-    if (!BASIS[frequency]) throw new Error('图像过小，无法读取坐标。');
+  if (!BASIS[frequency]) throw new Error('混淆图尺寸太小，无法还原。');
     const x = block % (width / 8) * 8;
     const y = Math.floor(block / (width / 8)) * 8;
     let coefficient = 0;
@@ -538,7 +538,7 @@ function readHeader(image) {
 export async function encodeImage(source, preset, options = {}) {
   let clock = performance.now();
   const timing = (label) => { const now = performance.now(); options.onTiming?.(label, now - clock); clock = now; };
-  options.onProgress?.({ label: '准备图像与预设', fraction: 0 });
+  options.onProgress?.({ label: '准备原图和预设', fraction: 0 });
   const plan = createPlan(source.width, source.height, options);
   const step = clamp(Math.round(options.step ?? 16), 4, 96);
   const flattened = flattenImage(source);
@@ -546,11 +546,11 @@ export async function encodeImage(source, preset, options = {}) {
   const targetImage = fitImage(preset, plan.outputWidth, plan.outputHeight, options.fit ?? 'contain', plan.panels);
   const target = flattenImage(targetImage);
   timing('prepare');
-  options.onProgress?.({ label: '按颜色与轮廓匹配细分块', fraction: 0.15 });
+  options.onProgress?.({ label: '比对原图和预设', fraction: 0.15 });
   await pause();
   const mapping = matchTiles(padded, target.data, plan);
   timing('match');
-  options.onProgress?.({ label: '重排分块并适配颜色', fraction: 0.3 });
+  options.onProgress?.({ label: '重排图块并调整颜色', fraction: 0.3 });
   const output = new Uint8ClampedArray(padded.length);
   const colorMeans = new Uint8Array(plan.tileCount * 3);
   for (let i = 0; i < plan.tileCount; i += 1) {
@@ -574,14 +574,14 @@ export async function encodeImage(source, preset, options = {}) {
 export async function restoreImage(image, options = {}) {
   let clock = performance.now();
   const timing = (label) => { const now = performance.now(); options.onTiming?.(label, now - clock); clock = now; };
-  options.onProgress?.({ label: '读取图像参数', fraction: 0 });
+  options.onProgress?.({ label: '读取混淆图信息', fraction: 0 });
   const { plan, step, checksum } = readHeader(image);
   timing('header');
   const extracted = await watermark(image.data, plan, step, null, null, true, options.onProgress);
   timing('watermark');
-  options.onProgress?.({ label: '校验并纠正坐标', fraction: 0.56 });
+  options.onProgress?.({ label: '检查还原信息', fraction: 0.56 });
   const { payload, corrected } = unprotectPayload(extracted.payload, plan);
-  if (crc32(payload) !== checksum) throw new Error('坐标校验失败，无法可靠还原。');
+  if (crc32(payload) !== checksum) throw new Error('图片信息校验失败，无法可靠还原。');
   timing('ecc');
   const seen = new Uint8Array(plan.tileCount);
   const cropped = new Uint8ClampedArray(plan.width * plan.height * 4);
@@ -598,14 +598,14 @@ export async function restoreImage(image, options = {}) {
   // tileStart * ratio + ceil(x * ratio), matching the original decoder.
   const xRanges = Uint32Array.from({ length: plan.width + 1 }, (_, x) => Math.ceil(x * plan.pixelScale));
   const yRanges = Uint32Array.from({ length: plan.height + 1 }, (_, y) => Math.ceil(y * plan.pixelScale));
-  options.onProgress?.({ label: '拼回分块并恢复颜色', fraction: 0.65 });
+  options.onProgress?.({ label: '拼回图块并恢复颜色', fraction: 0.65 });
   for (let tile = 0; tile < plan.tileCount; tile += 1) {
     let original = 0;
     for (let bit = 0; bit < plan.coordinateBits; bit += 1) {
       const offset = tile * plan.payloadBits + bit;
       original |= ((payload[offset >> 3] >>> (offset & 7)) & 1) << bit;
     }
-    if (original >= plan.tileCount || seen[original]) throw new Error('坐标排列校验失败。');
+    if (original >= plan.tileCount || seen[original]) throw new Error('图片信息异常，无法可靠还原。');
     seen[original] = 1;
     const fromX = tile % plan.columns * size;
     const fromY = Math.floor(tile / plan.columns) * size;
@@ -651,7 +651,7 @@ export async function restoreImage(image, options = {}) {
       cropped[destination] = r / count; cropped[destination + 1] = g / count; cropped[destination + 2] = b / count;
       cropped[destination + 3] = 255;
     }
-    if ((tile & 4095) === 4095) options.onProgress?.({ label: '拼回分块并恢复颜色', fraction: 0.65 + 0.35 * (tile + 1) / plan.tileCount });
+    if ((tile & 4095) === 4095) options.onProgress?.({ label: '拼回图块并恢复颜色', fraction: 0.65 + 0.35 * (tile + 1) / plan.tileCount });
   }
   if (fullGrid) for (let y = 0; y < plan.height; y += 1) for (let x = 0; x < plan.width; x += 1) {
     let r = 0; let g = 0; let b = 0;

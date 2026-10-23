@@ -9,6 +9,7 @@ import { decode, png } from './image-io.mjs';
 import { embeddedImagePayload, parseGif } from '../gif-codec.mjs';
 
 const chrome = process.env.CHROME_EXECUTABLE ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+const testUrl = process.env.NAIWA_TEST_URL ?? 'http://127.0.0.1:4173/';
 const temporaryRoot = await artifactDirectory('browser');
 if (process.argv.includes('--background')) {
   const log = await open(join(temporaryRoot, 'browser-smoke.log'), 'w');
@@ -29,7 +30,7 @@ const browser = spawn(chrome, [
   `--user-data-dir=${profile}`,
   `--crash-dumps-dir=${temporaryRoot}`,
   '--window-size=1440,1100',
-  'http://127.0.0.1:4173/',
+  testUrl,
 ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true, env: artifactEnvironment(temporaryRoot) });
 
 let browserOutput = '';
@@ -166,7 +167,7 @@ try {
   const basicMode = await evaluate(`({advancedClosed: !document.querySelector('#advanced-settings').open, manual: document.querySelector('#manual-parameters').checked, quality: document.querySelector('#jpg-quality').value, tileType: document.querySelector('#tile-size').type, tile: document.querySelector('#tile-size').value, autoCarrier: document.querySelector('#auto-carrier').checked, carrierDisabled: document.querySelector('#carrier-scale').disabled, button: document.querySelector('#download-button').textContent})`);
   if (!basicMode.advancedClosed || basicMode.manual || basicMode.quality !== '75' || basicMode.tileType !== 'range' || basicMode.tile !== '8' || !basicMode.autoCarrier || !basicMode.carrierDisabled || !basicMode.button.includes('JPG')) throw new Error(`Incorrect basic defaults: ${JSON.stringify(basicMode)}`);
   const carrierPairing = await evaluate(`(() => {const tile=document.querySelector('#tile-size');tile.value='4';tile.dispatchEvent(new Event('input'));const fine=document.querySelector('#carrier-scale').value;tile.value='8';tile.dispatchEvent(new Event('input'));return {fine,restored:document.querySelector('#carrier-scale').value,hint:document.querySelector('#tile-size-hint').textContent,choices:document.querySelector('#carrier-scale').options.length}})()`);
-  if (carrierPairing.fine !== '4' || carrierPairing.restored !== '2' || carrierPairing.choices !== 15 || !carrierPairing.hint.includes('2 倍载体')) throw new Error(`Automatic carrier pairing is incorrect: ${JSON.stringify(carrierPairing)}`);
+   if (carrierPairing.fine !== '4' || carrierPairing.restored !== '2' || carrierPairing.choices !== 15 || !carrierPairing.hint.includes('调小后')) throw new Error(`Automatic carrier pairing is incorrect: ${JSON.stringify(carrierPairing)}`);
   await setInputFile('#source-file', inputFile);
   await waitFor('document.querySelector("#source-meta").textContent.includes("test-photo.png")');
   await evaluate('document.querySelector("#encode-button").click()');
@@ -174,7 +175,7 @@ try {
   if (await evaluate('document.querySelector("#result-summary").textContent.includes("处理未完成")')) throw new Error(await evaluate('document.querySelector("#toast").textContent'));
   const carrierDimensions = await evaluate('({width: document.querySelector("#mosaic-preview").width, height: document.querySelector("#mosaic-preview").height})');
   if (carrierDimensions.width !== 3648 || carrierDimensions.height !== 2048) throw new Error(`Default carrier must be 8px / 2x: ${JSON.stringify(carrierDimensions)}`);
-  if (!await evaluate(`document.querySelector('#applied-options').textContent.includes('8×8') && document.querySelector('#applied-options').textContent.includes('2 倍载体')`)) throw new Error('Default must use 8px tiles and a 2x carrier');
+   if (!await evaluate(`document.querySelector('#applied-options').textContent.includes('8 px 图块') && document.querySelector('#applied-options').textContent.includes('放大 2 倍')`)) throw new Error('Default must use 8px tiles and a 2x carrier');
   if (!await evaluate(`!document.querySelector('#preview-area').hidden && document.querySelector('#result-strip').dataset.status === 'ready'`)) throw new Error('Generation did not reveal the preview row and verified output');
   const previewBounds = await evaluate(`(() => {const area=document.querySelector('#preview-area'),grid=document.querySelector('#preview-grid');return {body:document.body.className,html:document.documentElement.className,area:{height:Math.round(area.getBoundingClientRect().height),display:getComputedStyle(area).display,hidden:area.hidden},grid:{height:Math.round(grid.getBoundingClientRect().height),css:getComputedStyle(grid).height},panels:[...document.querySelectorAll('.preview-panel')].filter(panel=>panel.getClientRects().length&&getComputedStyle(panel).display!=='none').map(panel=>{const box=panel.getBoundingClientRect(),canvas=panel.querySelector('.canvas-wrap').getBoundingClientRect();return {panel:panel.dataset.panel,height:Math.round(box.height),canvas:Math.round(canvas.height),overflow:canvas.bottom>box.bottom+1}})}})()`);
   if (previewBounds.panels.some((panel) => panel.canvas < 120 || panel.overflow)) throw new Error(`Visible preview panels collapsed or overflowed: ${JSON.stringify(previewBounds)}`);
@@ -208,9 +209,21 @@ try {
   await command('Input.dispatchMouseEvent', { type: 'mousePressed', x: panBounds.x, y: panBounds.y, button: 'left', buttons: 1, clickCount: 1 });
   await command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: panBounds.x - 60, y: panBounds.y - 40, button: 'left', buttons: 1 });
   await command('Input.dispatchMouseEvent', { type: 'mouseReleased', x: panBounds.x - 60, y: panBounds.y - 40, button: 'left', buttons: 0, clickCount: 1 });
-  const panMoved = await evaluate(`(() => {const v=document.querySelector('#mosaic-preview').closest('.canvas-viewport');return v.scrollLeft>window.__panBefore.x&&v.scrollTop>window.__panBefore.y})()`);
-  if (!panMoved) throw new Error('Mouse drag did not pan the mosaic viewer');
-  await evaluate('document.querySelector("#zoom-fit").click()');
+   const panMoved = await evaluate(`(() => {const v=document.querySelector('#mosaic-preview').closest('.canvas-viewport');return v.scrollLeft>window.__panBefore.x&&v.scrollTop>window.__panBefore.y})()`);
+   if (!panMoved) throw new Error('Mouse drag did not pan the mosaic viewer');
+   await command('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+   const touchViewport = await evaluate(`(() => {document.querySelector('#zoom-fit').click();document.querySelector('#preview-area').scrollIntoView({block:'start'});const viewport=document.querySelector('#mosaic-preview').closest('.canvas-viewport');const fitAction=getComputedStyle(viewport).touchAction;document.querySelector('#zoom-one').click();const rect=viewport.getBoundingClientRect();return {fitAction,zoomedAction:getComputedStyle(viewport).touchAction,x:Math.round(rect.left+rect.width/2),y:Math.round(rect.top+rect.height/2)}})()`);
+   if (touchViewport.fitAction !== 'pan-y' || touchViewport.zoomedAction !== 'none') throw new Error(`Touch gestures are not configured for fit and zoomed previews: ${JSON.stringify(touchViewport)}`);
+   await evaluate(`(() => {const viewport=document.querySelector('#mosaic-preview').closest('.canvas-viewport');window.__touchPanBefore={x:viewport.scrollLeft,y:viewport.scrollTop}})()`);
+   await command('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, x: touchViewport.x, y: touchViewport.y, radiusX: 2, radiusY: 2, force: 1 }] });
+   await command('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ id: 1, x: touchViewport.x - 60, y: touchViewport.y - 40, radiusX: 2, radiusY: 2, force: 1 }] });
+   await command('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+   const touchPanMoved = await evaluate(`(() => {const viewport=document.querySelector('#mosaic-preview').closest('.canvas-viewport');return viewport.scrollLeft>window.__touchPanBefore.x&&viewport.scrollTop>window.__touchPanBefore.y})()`);
+   if (!touchPanMoved) throw new Error('Touch drag did not pan the zoomed mosaic preview');
+   await evaluate('window.scrollTo(0,0)');
+   await command('Emulation.clearDeviceMetricsOverride');
+   console.log(`touch preview passed: fit=${touchViewport.fitAction}, zoomed=${touchViewport.zoomedAction}, pan=${touchPanMoved}`);
+   await evaluate('document.querySelector("#zoom-fit").click()');
   const initialBytes = await evaluate('Number(document.querySelector("#output-size").dataset.bytes)');
   // Drag rapidly in both directions; the final quality and the cached download
   // must agree, and older asynchronous previews may not overwrite the last one.
@@ -232,7 +245,7 @@ try {
   await setInputFile('#encoded-file', jpgPath);
   await waitFor('document.querySelector("#encoded-meta").textContent.includes("test-photo-obfuscated-q65.jpg")');
   await evaluate('document.querySelector("#decode-button").click()');
-  const restoredMessage = await waitFor('document.querySelector("#decode-message").textContent.includes("坐标验证通过")');
+  const restoredMessage = await waitFor('document.querySelector("#decode-message").textContent.includes("还原完成")');
   const restoredDimensions = await evaluate('({width: document.querySelector("#decode-preview").width, height: document.querySelector("#decode-preview").height})');
   if (restoredDimensions.width !== 1820 || restoredDimensions.height !== 1024) throw new Error(`Restored dimensions incorrect: ${JSON.stringify(restoredDimensions)}`);
   await evaluate('document.querySelector("[data-view=decode]").click();new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))');
@@ -265,7 +278,7 @@ try {
     const source=document.querySelector('#source-preview');
     const sourcePixels=source.getContext('2d').getImageData(0,0,source.width,source.height).data;
     const pngSSIM=imageSimilarity(sourcePixels,restored.data,source.width,source.height);
-    const jpgSSIM=Number(document.querySelector('#restore-metrics').textContent.match(/SSIM ([0-9.]+)/)[1]);
+     const jpgSSIM=Number(document.querySelector('#restore-metrics').textContent.match(/评分 · ([0-9.]+)/)[1]);
     return {pngSSIM,jpgSSIM};
   })()`);
   if (Math.abs(compressionComparison.pngSSIM - compressionComparison.jpgSSIM) > 0.015) throw new Error(`Unexpected JPG restoration degradation: ${JSON.stringify(compressionComparison)}`);
@@ -275,18 +288,18 @@ try {
   await evaluate('document.querySelector("#advanced-settings").open = false');
   await waitFor('document.querySelector(".advanced-preview").hidden');
   await evaluate('document.querySelector("#balance").value=100; document.querySelector("#balance").dispatchEvent(new Event("input"))');
-  await waitFor('document.querySelector("#applied-options").textContent.includes("细节 25%") && document.querySelector("#balance-value").value === "预设相似度优先" && document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
-  const presetPriority = await evaluate('({outline:Number(document.querySelector("#preset-score").textContent.match(/轮廓 SSIM ([0-9.]+)/)[1]),restored:Number(document.querySelector("#restore-metrics").textContent.match(/SSIM ([0-9.]+)/)[1])})');
+     await waitFor('document.querySelector("#applied-options").textContent.includes("保留 25%") && document.querySelector("#balance-value").value === "混淆图更像预设" && document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
+   const presetPriority = await evaluate('({outline:Number(document.querySelector("#preset-score").textContent.match(/轮廓 ([0-9.]+)/)[1]),restored:Number(document.querySelector("#restore-metrics").textContent.match(/评分 · ([0-9.]+)/)[1])})');
   await evaluate('document.querySelector("#balance").value=0; document.querySelector("#balance").dispatchEvent(new Event("input"))');
-  await waitFor('document.querySelector("#applied-options").textContent.includes("细节 100%") && document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
-  const priorityScores = await evaluate('({restored:Number(document.querySelector("#restore-metrics").textContent.match(/SSIM ([0-9.]+)/)[1]),preset:Number(document.querySelector("#preset-score").textContent.match(/轮廓 SSIM ([0-9.]+)/)[1])})');
+   await waitFor('document.querySelector("#applied-options").textContent.includes("保留 100%") && document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
+   const priorityScores = await evaluate('({restored:Number(document.querySelector("#restore-metrics").textContent.match(/评分 · ([0-9.]+)/)[1]),preset:Number(document.querySelector("#preset-score").textContent.match(/轮廓 ([0-9.]+)/)[1])})');
   const qualityPriorityScore = priorityScores.restored;
   if (qualityPriorityScore <= 0.90 || qualityPriorityScore <= presetPriority.restored) throw new Error(`Quality preference did not improve restoration quality: ${JSON.stringify({ presetPriority, qualityPriorityScore })}`);
   if (presetPriority.outline <= priorityScores.preset) throw new Error(`Preset preference did not improve the mixed image resemblance: ${presetPriority.outline} -> ${priorityScores.preset}`);
   console.log(`preference endpoints: quality-first SSIM ${qualityPriorityScore} vs preset-first ${presetPriority.restored}; preset-first outline ${presetPriority.outline} vs quality-first ${priorityScores.preset}`);
   // Benchmark the standard balanced profile after checking automatic re-generation.
   await evaluate('document.querySelector("#balance").value=50; document.querySelector("#balance").dispatchEvent(new Event("input"))');
-  await waitFor('document.querySelector("#applied-options").textContent.includes("强度 16") && document.querySelector("#applied-options").textContent.includes("细节 75%") && document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
+   await waitFor('document.querySelector("#applied-options").textContent.includes("8 px 图块") && document.querySelector("#applied-options").textContent.includes("保留 75%") && document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
 
   const makeFixture = async (name, width, height, transparent = false) => {
     const data = new Uint8ClampedArray(width * height * 4);
@@ -330,7 +343,7 @@ try {
   await setInputFile('#source-file', smallPath);
   await waitFor('document.querySelector("#source-preview").width === 1638');
   await evaluate(`document.querySelector('#advanced-settings').open=true;document.querySelector('#auto-carrier').checked=false;document.querySelector('#auto-carrier').dispatchEvent(new Event('change'));document.querySelector('#carrier-scale').value='3';document.querySelector('#carrier-scale').dispatchEvent(new Event('input'));document.querySelector('#manual-parameters').checked=true;document.querySelector('#manual-parameters').dispatchEvent(new Event('change'));document.querySelector('#tile-size').value='4';document.querySelector('#tile-size').dispatchEvent(new Event('input'));document.querySelector('#encode-button').click()`);
-  await waitFor('document.querySelector("#applied-options").textContent.includes("4×4") && document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
+   await waitFor('document.querySelector("#applied-options").textContent.includes("4 px 图块") && document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
   const fineDimensions = await evaluate('({width:document.querySelector("#mosaic-preview").width,height:document.querySelector("#mosaic-preview").height})');
   if (fineDimensions.width !== 4920 || fineDimensions.height !== 3072) throw new Error(`Incorrect 4px / 3x dimensions: ${JSON.stringify(fineDimensions)}`);
   await evaluate('document.querySelector("#download-button").click()');
@@ -341,12 +354,12 @@ try {
   await setInputFile('#encoded-file', fineJpgPath);
   await waitFor('document.querySelector("#encoded-meta").textContent.includes("q75")');
   await evaluate('document.querySelector("#decode-button").click()');
-  await waitFor('document.querySelector("#decode-message").textContent.includes("坐标验证通过")');
+  await waitFor('document.querySelector("#decode-message").textContent.includes("还原完成")');
   if (!await evaluate('document.querySelector("#decode-preview").width === 1638 && document.querySelector("#decode-preview").height === 1024')) throw new Error('Fine-tile JPG restored to the wrong dimensions');
   await screenshot('naiwa-browser-fine-tiles.png');
   console.log(`4px / 3x JPG download and automatic restoration passed: ${JSON.stringify(fineDimensions)}`);
   await evaluate(`document.querySelector('#auto-resize').checked=false;document.querySelector('#auto-resize').dispatchEvent(new Event('change'));document.querySelector('#source-scale').value=800;document.querySelector('#source-scale').dispatchEvent(new Event('change'));document.querySelector('#carrier-scale').value='4';document.querySelector('#carrier-scale').dispatchEvent(new Event('input'));document.querySelector('#jpg-quality').value=80;document.querySelector('#jpg-quality').dispatchEvent(new Event('input'))`);
-  await waitFor('document.querySelector("#applied-options").textContent.includes("4 倍载体") && document.querySelector("#output-size").dataset.quality === "80" && document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
+   await waitFor('document.querySelector("#applied-options").textContent.includes("放大 4 倍") && document.querySelector("#output-size").dataset.quality === "80" && document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
   if (!await evaluate('document.querySelector("#mosaic-preview").width === 5120 && document.querySelector("#mosaic-preview").height === 3200')) throw new Error('Incorrect 4px / 4x carrier dimensions');
   await evaluate('document.querySelector("#download-button").click()');
   const scale4DownloadStart = Date.now();
@@ -355,7 +368,7 @@ try {
   await setInputFile('#encoded-file', join(downloads, 'small-source-obfuscated-q80.jpg'));
   await waitFor('document.querySelector("#encoded-meta").textContent.includes("q80")');
   await evaluate('document.querySelector("#decode-button").click()');
-  await waitFor('document.querySelector("#decode-message").textContent.includes("坐标验证通过")');
+  await waitFor('document.querySelector("#decode-message").textContent.includes("还原完成")');
   if (!await evaluate('document.querySelector("#decode-preview").width === 1280 && document.querySelector("#decode-preview").height === 800')) throw new Error('4x carrier restored to the wrong source dimensions');
   console.log('4px / 4x JPG download and automatic restoration passed: 5120x3200 -> 1280x800');
   await command('Page.reload', { ignoreCache: true });
@@ -423,9 +436,9 @@ try {
   await evaluate(`document.querySelector('[data-view="decode"]').click();document.querySelector('#decode-button').click()`);
   await waitFor(`document.querySelectorAll('#decode-list .batch-item[data-status="done"]').length===2&&document.querySelectorAll('#decode-list .batch-item[data-status="error"]').length===1`);
   await evaluate(`document.querySelectorAll('#decode-list .batch-select')[0].click()`);
-  await waitFor(`document.querySelector('#decode-preview').width===640&&document.querySelector('#decode-preview').height===360&&document.querySelector('#decode-message').textContent.includes('坐标验证通过')`);
+  await waitFor(`document.querySelector('#decode-preview').width===640&&document.querySelector('#decode-preview').height===360&&document.querySelector('#decode-message').textContent.includes('还原完成')`);
   await evaluate(`document.querySelectorAll('#decode-list .batch-select')[1].click()`);
-  await waitFor(`document.querySelector('#decode-preview').width===160&&document.querySelector('#decode-preview').height===100&&document.querySelector('#decode-message').textContent.includes('坐标验证通过')`);
+  await waitFor(`document.querySelector('#decode-preview').width===160&&document.querySelector('#decode-preview').height===100&&document.querySelector('#decode-message').textContent.includes('还原完成')`);
   const beforeRestoreDownloads = finishedDownloads.length;
   await evaluate(`document.querySelector('#download-restored').click();document.querySelector('#download-all-restored').click()`);
   const restoreDownloadStart = Date.now();
@@ -458,21 +471,21 @@ try {
   await setInputFile('#source-file', gifInput);
   await waitFor(`document.querySelector('#source-list .batch-item')?.dataset.status==='idle'&&document.querySelector('#source-meta').textContent.includes('2.gif')`);
   await evaluate(`document.querySelector('.preset-option[data-index="4"]').click();document.querySelector('#advanced-settings').open=true;document.querySelector('#encode-button').click()`);
-  await waitFor(`document.querySelector('#result-summary').textContent.includes('原图精确还原验证通过')`, 240000);
+  await waitFor(`document.querySelector('#result-summary').textContent.includes('原图可完整还原')`, 240000);
   const gifMetrics = await evaluate(`({summary:document.querySelector('#result-summary').textContent,preset:document.querySelector('#preset-score').textContent,dimensions:document.querySelector('#mosaic-preview').width+'x'+document.querySelector('#mosaic-preview').height,animated:!!document.querySelector('[data-panel="mosaic"] .preview-animation:not([hidden])')&&document.querySelector('[data-panel="mosaic"] .preview-animation').naturalWidth>0,animatedDimensions:document.querySelector('[data-panel="mosaic"] .preview-animation')?.naturalWidth+'x'+document.querySelector('[data-panel="mosaic"] .preview-animation')?.naturalHeight,qualityDisabled:document.querySelector('#jpg-quality').disabled,carrierDisabled:document.querySelector('#carrier-scale').disabled,bytes:Number(document.querySelector('#output-size').dataset.bytes)})`);
   const originalGif = parseGif(gifOriginal); const selectedGifPreset = parseGif(await readFile(fileURLToPath(new URL('../images/animated/1.gif', import.meta.url)))); const gifDownload = Date.now();
   await evaluate(`document.querySelector('#download-button').click()`);
   while (finishedDownloads.length < beforeGifDownload + 1 && Date.now() - gifDownload < 20000) await new Promise(resolve => setTimeout(resolve, 100));
   if (finishedDownloads.length < beforeGifDownload + 1) throw new Error('Obfuscated GIF download did not complete');
   const gifOutputPath = join(downloads, '2-obfuscated.gif'); const gifOutput = await readFile(gifOutputPath); const encodedGif = parseGif(gifOutput);
-  const presetScore = Number(gifMetrics.preset.match(/SSIM ([0-9.]+)/)?.[1]);
+  const presetScore = Number(gifMetrics.preset.match(/轮廓 ([0-9.]+)/)?.[1]);
   const followsGifPreset = encodedGif.duration === selectedGifPreset.duration && encodedGif.loop === selectedGifPreset.loop;
   if (!gifMetrics.animated || !gifMetrics.qualityDisabled || !gifMetrics.carrierDisabled || !followsGifPreset || gifMetrics.dimensions !== `${encodedGif.width}x${encodedGif.height}` || gifMetrics.animatedDimensions !== gifMetrics.dimensions || encodedGif.frames.length !== originalGif.frames.length || encodedGif.frames.length !== 50 || !(presetScore >= 0.5)) throw new Error(`GIF frame alignment, preset timing, preview or similarity failed: ${JSON.stringify({ ...gifMetrics, followsGifPreset, outputDuration: encodedGif.duration, targetDuration: selectedGifPreset.duration, outputLoop: encodedGif.loop, targetLoop: selectedGifPreset.loop })}`);
   if (gifMetrics.bytes !== gifOutput.length || gifOutput.length > gifOriginal.length * 3) throw new Error(`GIF output size exceeded the 3x budget or displayed size differed: ${JSON.stringify({ metrics: gifMetrics, actual: gifOutput.length, input: gifOriginal.length })}`);
   await setInputFile('#encoded-file', gifOutputPath);
   await waitFor(`document.querySelector('#decode-list .batch-item')?.dataset.status==='idle'`);
   await evaluate(`document.querySelector('[data-view="decode"]').click();document.querySelector('#decode-button').click()`);
-  await waitFor(`document.querySelector('#decode-message').textContent.includes('GIF')&&document.querySelector('#decode-message').textContent.includes('精确还原')`);
+  await waitFor(`document.querySelector('#decode-message').textContent.includes('GIF')&&document.querySelector('#decode-message').textContent.includes('完整还原')`);
   const beforeRestoredGifDownload = finishedDownloads.length; await evaluate(`document.querySelector('#download-restored').click()`);
   const restoredGifDeadline = Date.now();
   while (finishedDownloads.length < beforeRestoredGifDownload + 1 && Date.now() - restoredGifDeadline < 20000) await new Promise(resolve => setTimeout(resolve, 100));
@@ -480,8 +493,8 @@ try {
   if (!restoredGif.equals(gifOriginal)) throw new Error('Restored GIF bytes differ from the uploaded original');
   console.log(`GIF encode/restore passed: ${JSON.stringify({ ...gifMetrics, inputBytes: gifOriginal.length, actualBytes: gifOutput.length, ratio: Number((gifOutput.length / gifOriginal.length).toFixed(2)), frames: encodedGif.frames.length, exactRestore: restoredGif.equals(gifOriginal) })}`);
   await evaluate(`document.querySelector('.preset-option[data-index="0"]').click();document.querySelector('#encode-button').click()`);
-  await waitFor(`document.querySelector('#preset-score').textContent.includes('对齐 1 帧')&&document.querySelector('#result-summary').textContent.includes('原图精确还原验证通过')`, 240000);
-  if (!await evaluate(`document.querySelector('#preset-score').textContent.includes('帧平均预设 SSIM')`)) throw new Error('GIF encoding with a static preset failed');
+  await waitFor(`document.querySelector('#preset-score').textContent.includes('共 1 帧')&&document.querySelector('#result-summary').textContent.includes('原图可完整还原')`, 240000);
+  if (!await evaluate(`document.querySelector('#preset-score').textContent.includes('逐帧平均')`)) throw new Error('GIF encoding with a static preset failed');
   const staticTiming = await evaluate(`(async()=>{const image=document.querySelector('[data-panel="mosaic"] .preview-animation');const {parseGif}=await import('./gif-codec.mjs');const gif=parseGif(new Uint8Array(await (await fetch(image.src)).arrayBuffer()));return {duration:gif.duration,loop:gif.loop,frames:gif.frames.length}})()`);
   if (staticTiming.duration !== originalGif.duration || staticTiming.loop !== originalGif.loop) throw new Error(`Static preset should preserve source animation timing and loop behavior: ${JSON.stringify(staticTiming)}`);
   console.log('GIF encoding with a static image preset passed');
@@ -492,13 +505,13 @@ try {
     await setInputFile('#source-file', inputPath);
     await waitFor(`document.querySelector('#source-list .batch-item')?.dataset.status==='idle'&&document.querySelector('#source-meta').textContent.includes('${sample}')`);
     await evaluate(`document.querySelector('.preset-option[data-index="${preset}"]').click();document.querySelector('#encode-button').click()`);
-    await waitFor(`document.querySelector('#result-summary').textContent.includes('原图精确还原验证通过')`, 240000);
+    await waitFor(`document.querySelector('#result-summary').textContent.includes('原图可完整还原')`, 240000);
     const resultMetrics = await evaluate(`({preset:document.querySelector('#preset-score').textContent,bytes:Number(document.querySelector('#output-size').dataset.bytes),frames:Number(document.querySelector('#result-summary').textContent.match(/GIF (\\d+) 帧/)[1])})`);
     await evaluate(`document.querySelector('#download-button').click()`);
     const downloadDeadline = Date.now();
     while (finishedDownloads.length < beforeDownload + 1 && Date.now() - downloadDeadline < 20000) await new Promise(resolve => setTimeout(resolve, 100));
     const outputPath = join(downloads, `${sample.replace('.gif', '')}-obfuscated.gif`); const outputBytes = await readFile(outputPath); const outputGif = parseGif(outputBytes);
-    const outline = Number(resultMetrics.preset.match(/SSIM ([0-9.]+)/)?.[1]); const ratio = outputBytes.length / inputBytes.length;
+    const outline = Number(resultMetrics.preset.match(/轮廓 ([0-9.]+)/)?.[1]); const ratio = outputBytes.length / inputBytes.length;
     const targetPath = fileURLToPath(new URL(`../images/animated/${preset === 4 ? '1' : '2'}.gif`, import.meta.url));
     const targetGif = parseGif(await readFile(targetPath));
     const followsPreset = outputGif.duration === targetGif.duration && outputGif.loop === targetGif.loop;
@@ -513,22 +526,22 @@ try {
   await setInputFile('#source-file', smallPath);
   await waitFor(`document.querySelector('#source-list .batch-item')?.dataset.status==='idle'&&document.querySelector('#source-meta').textContent.includes('small-source.png')`);
   await evaluate(`document.querySelector('.preset-option[data-index="4"]').click();document.querySelector('#balance').value=50;document.querySelector('#balance').dispatchEvent(new Event('input'));document.querySelector('#encode-button').click()`);
-  await waitFor(`document.querySelector('#result-summary').textContent.includes('GIF 100 帧')&&document.querySelector('#result-summary').textContent.includes('原图精确还原验证通过')`, 240000);
+  await waitFor(`document.querySelector('#result-summary').textContent.includes('GIF 100 帧')&&document.querySelector('#result-summary').textContent.includes('原图可完整还原')`, 240000);
   const stillGifMetrics = await evaluate(`({preset:document.querySelector('#preset-score').textContent,options:document.querySelector('#applied-options').textContent,bytes:Number(document.querySelector('#output-size').dataset.bytes),animated:!!document.querySelector('[data-panel="mosaic"] .preview-animation:not([hidden])'),restored:document.querySelector('#restored-score').textContent})`);
   await evaluate(`document.querySelector('#download-button').click()`);
   const stillGifDownload = Date.now();
   while (finishedDownloads.length < beforeStillGifDownload + 1 && Date.now() - stillGifDownload < 20000) await new Promise(resolve => setTimeout(resolve, 100));
   const stillGifPath = join(downloads, 'small-source-obfuscated.gif'); const stillGifBytes = await readFile(stillGifPath); const stillGif = parseGif(stillGifBytes);
   const stillPayload = embeddedImagePayload(stillGif); const targetStillGif = parseGif(await readFile(fileURLToPath(new URL('../images/animated/1.gif', import.meta.url))));
-  const stillPresetScore = Number(stillGifMetrics.preset.match(/SSIM ([0-9.]+)/)?.[1]);
-  if (stillPayload?.mime !== 'image/png' || !gunzipSync(stillPayload.compressed).equals(staticOriginal) || stillGif.duration !== targetStillGif.duration || stillGif.loop !== targetStillGif.loop || stillGif.frames.length !== targetStillGif.frames.length || !stillGifMetrics.animated || !stillGifMetrics.restored.includes('静态图') || !stillGifMetrics.options.includes('细节 75%') || stillPresetScore < 0.5) {
+  const stillPresetScore = Number(stillGifMetrics.preset.match(/轮廓 ([0-9.]+)/)?.[1]);
+  if (stillPayload?.mime !== 'image/png' || !gunzipSync(stillPayload.compressed).equals(staticOriginal) || stillGif.duration !== targetStillGif.duration || stillGif.loop !== targetStillGif.loop || stillGif.frames.length !== targetStillGif.frames.length || !stillGifMetrics.animated || !stillGifMetrics.restored.includes('静态图') || !stillGifMetrics.options.includes('保留 75%') || stillPresetScore < 0.5) {
     throw new Error(`Static source to animated preset GIF failed: ${JSON.stringify({ ...stillGifMetrics, frames: stillGif.frames.length, duration: stillGif.duration, targetDuration: targetStillGif.duration, loop: stillGif.loop, targetLoop: targetStillGif.loop, mime: stillPayload?.mime })}`);
   }
   const beforeStillRestoreDownload = finishedDownloads.length;
   await setInputFile('#encoded-file', stillGifPath);
   await waitFor(`document.querySelector('#decode-list .batch-item')?.dataset.status==='idle'`);
   await evaluate(`document.querySelector('[data-view="decode"]').click();document.querySelector('#decode-button').click()`);
-  await waitFor(`document.querySelector('#decode-message').textContent.includes('精确还原')`);
+  await waitFor(`document.querySelector('#decode-message').textContent.includes('完整还原')`);
   await evaluate(`document.querySelector('#download-restored').click()`);
   const stillRestoreDeadline = Date.now();
   while (finishedDownloads.length < beforeStillRestoreDownload + 1 && Date.now() - stillRestoreDeadline < 20000) await new Promise(resolve => setTimeout(resolve, 100));
@@ -537,10 +550,11 @@ try {
   console.log(`static source / animated preset passed: ${JSON.stringify({ ...stillGifMetrics, frames: stillGif.frames.length, originalBytes: staticOriginal.length, outputBytes: stillGifBytes.length, exactRestore: true })}`);
 
   if (process.argv.includes('--reports')) {
-    await command('Page.navigate', { url: 'http://127.0.0.1:4173/reports/compare.html' });
-    await waitFor('document.querySelector("#selection")?.textContent.includes("当前约束下")');
+    await command('Page.navigate', { url: new URL('reports/compare.html', testUrl).href });
+    await waitFor('document.querySelector("#selection")?.textContent.includes("当前条件下")');
     const reportState = await evaluate('({ rows: document.querySelectorAll("#rows tr").length, text: document.querySelector("#selection").textContent })');
     if (reportState.rows !== 32) throw new Error(`Expected 32 report rows: ${JSON.stringify(reportState)}`);
+    if (!reportState.text.includes('8 px 图块 · 放大 2 倍 · 保留 75% 原图细节')) throw new Error(`Report settings are not shown in plain language: ${JSON.stringify(reportState)}`);
     const reportGate = await evaluate(`(() => {
       const input = document.querySelector('#preset-floor');
       input.value = '1'; input.dispatchEvent(new Event('input'));
@@ -558,5 +572,8 @@ try {
   console.log(`screenshots: ${transformScreenshot}`);
 } finally {
   socket.close();
-  browser.kill();
+  await new Promise(resolve => {
+    const cleanup = spawn('taskkill', ['/PID', String(browser.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+    cleanup.once('error', resolve); cleanup.once('exit', resolve);
+  });
 }

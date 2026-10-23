@@ -44,7 +44,7 @@ for (const scale of [1, 1.5, 2, 3, 4]) {
   try {
     const plan = createPlan(319, 173, { tileSize: 4, scale });
     assert.equal(plan.outputWidth % 8, 0); assert.equal(plan.outputHeight % 8, 0);
-  } catch (error) { assert.match(error.message, /无法容纳/); }
+  } catch (error) { assert.match(error.message, /无法生成可还原/); }
 }
 const preset = image(97, 61, true);
 const fitted = fitImage(preset, 512, 256, 'contain');
@@ -73,7 +73,7 @@ for (const colorGain of [1, 0.75, 0.5, 0.25]) {
   const restored = await restoreImage({ width: encoded.plan.outputWidth, height: encoded.plan.outputHeight, data: encoded.data });
   assert.equal(restored.plan.colorGain, colorGain, `header must preserve ${colorGain} color-adaptation gain for restoration`);
 }
-assert.throws(() => createPlan(192, 128, { tileSize: 3, scale: 1.5 }), /无法容纳/);
+assert.throws(() => createPlan(192, 128, { tileSize: 3, scale: 1.5 }), /无法生成可还原/);
 for (const [tileSize, scale] of [[3, 5.5], [7, 2.5]]) {
   const source = image(192, 128);
   const encoded = await encodeImage(source, preset, { tileSize, scale, step: 16 });

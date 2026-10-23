@@ -128,21 +128,21 @@ function syncSettings() {
   const settings = readSettings(); const scale = carrierScale(settings);
   const gifActive = Boolean(activeEntry('encode')?.isGif || animatedPreset(settings.preset));
   $('#jpg-quality').disabled = gifActive;
-  $('#jpg-quality-hint').textContent = gifActive ? 'GIF 保留动画帧和调色板；此滑条仅适用于 JPG 输出。' : '生成后可继续调节，实时显示 JPG 的实际大小。';
+  $('#jpg-quality-hint').textContent = gifActive ? 'GIF 保留动画，此设置只影响静态图片。' : '生成后还可继续调节，文件大小会实时更新。';
   if (settings.autoCarrier) $('#carrier-scale').value = String(scale);
   $('#carrier-scale').disabled = gifActive || settings.autoCarrier; $('#auto-carrier').disabled = gifActive;
   $('#source-scale').disabled = gifActive || settings.autoResize; $('#auto-resize').disabled = gifActive;
-  $('#tile-size-value').value = gifActive ? `${settings.tileSize} px · GIF` : `${settings.tileSize} px · ${scale}×`;
-  $('#tile-size-hint').textContent = gifActive ? `${settings.tileSize} px 分块用于适配每帧预设轮廓；GIF 使用索引色输出，不放大载体。` : `${settings.tileSize} px 分块 · ${settings.autoCarrier ? '自动匹配' : '手动使用'} ${scale} 倍载体；分块越细，倍率越高、输出也越大。`;
-  $('#carrier-scale-hint').textContent = gifActive ? 'GIF 保持 1 倍索引色载体，不使用静态图的载体倍率。' : settings.autoCarrier ? `当前 ${settings.tileSize} px 分块自动配 ${scale} 倍载体。高倍率会增加输出尺寸。` : '可手动选择 1–8 倍；细分块搭配低倍率可能无法容纳坐标。';
+  $('#tile-size-value').value = `${settings.tileSize} px`;
+  $('#tile-size-hint').textContent = gifActive ? '调小后，GIF 画面里的预设图案会更清楚。' : '调小后，混淆图里的预设图案会更清楚；文件也会更大。';
+  $('#carrier-scale-hint').textContent = gifActive ? 'GIF 会保留动画，不使用放大载体。' : settings.autoCarrier ? `当前自动放大 ${scale} 倍。倍数越高，混淆图文件越大。` : '可选 1–8 倍。倍数越高，混淆图文件越大；太低可能无法还原。';
   $('#jpg-quality-value').value = `${settings.quality}%`; $('#strength-value').value = String(settings.strength);
-  $('#balance-value').value = settings.balance < 34 ? '还原画质优先' : settings.balance > 66 ? '预设相似度优先' : '均衡';
+  $('#balance-value').value = settings.balance < 34 ? '还原图更清晰' : settings.balance > 66 ? '混淆图更像预设' : '两边兼顾';
   $('#manual-fields').disabled = !settings.manual; $('#balance').disabled = settings.manual;
-  $('#advanced-mode-label').textContent = gifActive ? 'GIF 帧适配参数' : settings.manual ? '手动算法参数' : '尺寸与自动配对';
-  $('#balance-hint').textContent = gifActive ? 'GIF 按每帧与预设轮廓匹配；向右增强预设颜色适配。' : settings.manual ? '手动算法参数已接管细节保留和水印强度。' : '左侧保留更多原图细节；向右会逐级加强预设适配，同时提高水印强度。';
+  $('#advanced-mode-label').textContent = gifActive ? 'GIF 动画设置' : settings.manual ? '自定义效果' : '尺寸与效果微调';
+  $('#balance-hint').textContent = gifActive ? '往右调，GIF 画面会更接近所选预设。' : settings.manual ? '当前使用下方的自定义选项调整效果。' : '往左调，还原图会保留更多原图细节；往右调，混淆图会更接近所选预设。';
   $('.advanced-preview').hidden = !$('#advanced-settings').open;
   $('#preview-grid').classList.toggle('has-target', $('#advanced-settings').open);
-  $('#batch-settings-hint').textContent = $('#unify-settings').checked ? '调节设置会应用到所有条目。' : '仅调整当前选中条目，其他条目保留各自设置。';
+  $('#batch-settings-hint').textContent = $('#unify-settings').checked ? '调整一张图片时，其他图片也会使用相同设置。' : '只调整当前选中的图片。';
 }
 
 function syncSourceMeta(entry) {
@@ -229,7 +229,7 @@ function renderStatus(entry, kind) {
     $('#download-button').disabled = !ready; $('#download-png').disabled = !ready || animatedOutput;
     $('#download-png').textContent = animatedOutput ? 'GIF 含可还原原图数据' : '另存压缩前 PNG';
     $('#download-button').textContent = animatedOutput ? '下载 GIF' : '下载 JPG';
-    $('#result-summary').textContent = entry.status === 'done' ? animatedOutput ? `GIF ${entry.result.gifFrames} 帧 · 原图精确还原验证通过` : `还原验证通过 · JPG ${entry.result.quality}%` : entry.status === 'warning' ? '当前 JPG 未能还原，可提高质量后重试' : entry.label;
+    $('#result-summary').textContent = entry.status === 'done' ? animatedOutput ? `GIF ${entry.result.gifFrames} 帧 · 原图可完整还原` : `生成完成 · JPG ${entry.result.quality}%，还原验证通过` : entry.status === 'warning' ? '这份 JPG 暂时无法还原，可提高 JPG 质量后重试' : entry.label;
     $('#result-strip').dataset.status = entry.status === 'done' ? 'ready' : entry.status === 'warning' ? 'warning' : entry.status === 'error' ? 'error' : isProcessing(entry) ? 'checking' : 'pending';
     $('#result-strip').classList.toggle('is-ready', ready);
     $('#output-size').textContent = ready ? formatBytes(entry.result.jpg.size) : isProcessing(entry) ? '正在计算…' : '生成后显示';
@@ -244,7 +244,7 @@ async function renderEncode(entry) {
   const token = ++state.encodePaint; const current = () => activeEntry('encode') === entry && token === state.encodePaint;
   if (!entry) {
     $('#preview-area').hidden = true; $('#source-meta').textContent = '尚未选择图像';
-    $('#source-sizing-summary').textContent = '小图自动放大，大图适度缩小；高级模式可调整。';
+    $('#source-sizing-summary').textContent = '小图会放大，大图会缩小；可在高级设置中调整。';
     $('#download-button').disabled = $('#download-png').disabled = true; syncDesktopLayout(); return;
   }
   syncSourceMeta(entry); renderStatus(entry, 'encode');
@@ -254,15 +254,16 @@ async function renderEncode(entry) {
   if (result) { $('#result-summary').textContent = '正在更新预览…'; $('#result-strip').dataset.status = 'checking'; }
   $('#preview-area').hidden = !result && !entry.started; syncDesktopLayout();
   for (const name of ['mosaic', 'restored', 'target']) $(`#${name}-empty`).hidden = !entry.started ? false : Boolean(result && (name !== 'restored' || result.restoredPreview));
-  $('#mosaic-empty').textContent = entry.status === 'error' ? '生成未完成，可调整设置后重试' : entry.label;
-  $('#restored-empty').textContent = result?.warning ? '可提高 JPG 质量后再次查看还原效果' : result?.isGif ? result.originalMime === 'image/gif' ? '生成后显示可精确还原的原动画' : '生成后显示可精确还原的原静态图' : '生成后显示最终 JPG 的还原效果';
+  $('#mosaic-empty').textContent = entry.status === 'error' ? '生成失败，可调整设置后重试' : entry.label;
+  $('#restored-title').textContent = result?.isGif ? '还原后的原图' : 'JPG 还原效果';
+  $('#restored-empty').textContent = result?.warning ? '可提高 JPG 质量后再次尝试' : result?.isGif ? result.originalMime === 'image/gif' ? '这里会显示还原后的原动画' : '这里会显示还原后的原图' : '生成后显示 JPG 还原效果';
   $('#mosaic-dimensions').textContent = result ? `${result.plan.outputWidth} × ${result.plan.outputHeight}` : '等待生成';
   $('#target-dimensions').textContent = result ? `${result.targetWidth ?? result.plan.outputWidth} × ${result.targetHeight ?? result.plan.outputHeight}` : '与混淆图同尺寸';
-  $('#restored-score').textContent = result ? result.warning ? '当前 JPG 未能还原' : result.isGif ? result.originalMime === 'image/gif' ? '精确原 GIF' : '精确原静态图' : `来自 JPG ${result.quality}%` : '等待生成';
-  $('#preset-score').textContent = result ? result.isGif ? `GIF 帧平均预设 SSIM ${result.resemblance.outline.toFixed(4)} · 细节 ${result.resemblance.detail.toFixed(4)} · 对齐 ${result.targetFrames} 帧` : `最终 JPG 预设轮廓 SSIM ${result.resemblance.outline.toFixed(4)} · 细节 ${result.resemblance.detail.toFixed(4)}` : '生成后显示预设轮廓与细节 SSIM';
-  $('#restore-metrics').textContent = result ? result.warning ?? (result.isGif ? `内嵌原图 · ${formatBytes(result.originalBytes)}` : `JPG 还原 SSIM ${result.restoredSSIM.toFixed(4)} · 纠正 ${result.corrected} 字节`) : '生成后显示 JPG 还原 SSIM';
+  $('#restored-score').textContent = result ? result.warning ? '当前 JPG 无法还原' : result.isGif ? result.originalMime === 'image/gif' ? '原 GIF 已完整还原' : '原静态图已完整还原' : `来自 JPG ${result.quality}%` : '等待生成';
+  $('#preset-score').textContent = result ? result.isGif ? `预设相似度评分（逐帧平均）· 轮廓 ${result.resemblance.outline.toFixed(4)} · 细节 ${result.resemblance.detail.toFixed(4)} · 共 ${result.targetFrames} 帧` : `JPG 中的预设相似度评分 · 轮廓 ${result.resemblance.outline.toFixed(4)} · 细节 ${result.resemblance.detail.toFixed(4)}` : '混淆图与预设的相似度评分（越高越像）';
+  $('#restore-metrics').textContent = result ? result.warning ?? (result.isGif ? `原图保存在 GIF 中 · ${formatBytes(result.originalBytes)}` : `JPG 还原效果评分 · ${result.restoredSSIM.toFixed(4)}`) : '生成后显示还原效果评分';
   const plan = result?.plan;
-  $('#applied-options').textContent = plan ? animatedOutput ? `索引色 GIF · ${result.gifFrames} 帧 · ${plan.width} × ${plan.height} · 8 bit 色彩映射 · 细节 ${Math.round(plan.colorGain * 100)}%` : `${entry.settings.manual ? '手动' : '自动'} · 处理图 ${plan.tileSize}×${plan.tileSize} px 分块 · ${plan.scale} 倍载体 · ${plan.panels} 段 · 坐标 ${plan.coordinateBits} bit/块 · 强度 ${plan.step} · 细节 ${Math.round(plan.colorGain * 100)}%${plan.transparentPixels ? ' · 原图透明像素已合成白底' : ''}` : '生成后显示实际采用的参数';
+  $('#applied-options').textContent = plan ? animatedOutput ? `GIF 动画 · ${result.gifFrames} 帧 · ${plan.width} × ${plan.height} · 保留 ${Math.round(plan.colorGain * 100)}% 原图细节` : `${entry.settings.manual ? '自定义' : '自动'}设置 · ${plan.tileSize} px 图块 · 混淆图放大 ${plan.scale} 倍 · ${plan.panels} 段处理 · 保留 ${Math.round(plan.colorGain * 100)}% 原图细节${plan.transparentPixels ? ' · 透明部分已铺白底' : ''}` : '生成后显示实际使用的设置';
   const size = entry.size;
   if (!size) return;
   const paints = [paintBlob($('#source-preview'), result?.sourcePreview ?? entry.file, size.width, size.height, current)];
@@ -282,9 +283,9 @@ async function renderDecode(entry) {
   $('#download-restored').textContent = restoredMime === 'image/gif' || (!restoredMime && entry?.isGif) ? '下载还原 GIF' : '下载还原图像';
   $('#decode-empty').hidden = Boolean(isReady(entry));
   $('#decode-empty').textContent = entry?.label ?? '选择混淆图文件';
-  $('#encoded-meta').textContent = entry?.width ? `${entry.file.name} · ${entry.width} × ${entry.height}` : '选择包含坐标信息的图像';
+  $('#encoded-meta').textContent = entry?.width ? `${entry.file.name} · ${entry.width} × ${entry.height}` : '选择要还原的混淆图';
   $('#decode-dimensions').textContent = isReady(entry) ? `${entry.result.plan.width} × ${entry.result.plan.height}` : '等待解码';
-  $('#decode-message').textContent = isReady(entry) ? '正在更新还原预览…' : entry?.label ?? '等待输入'; $('#decode-message').classList.toggle('is-success', entry?.status === 'done');
+   $('#decode-message').textContent = isReady(entry) ? '正在更新还原预览…' : entry?.label ?? '请选择混淆图'; $('#decode-message').classList.toggle('is-success', entry?.status === 'done');
   if (isReady(entry)) {
     await paintBlob($('#decode-preview'), entry.result.blob, entry.result.plan.width, entry.result.plan.height, current);
     if (current()) renderStatus(entry, 'decode');
@@ -390,8 +391,8 @@ async function processEntry(entry, kind) {
       retained += cache.raw.size;
       if (retained > Math.min(pool.memoryBudget / 2, 128 * 1048576)) cache.raw = null;
     }
-    entry.label = kind === 'encode' ? result.warning ? '已生成 · 还原验证未通过' : result.isGif ? `完成 · ${result.gifFrames} 帧 · 原图精确还原验证通过` : '完成 · JPG 还原验证通过'
-      : result.isGif ? `GIF ${result.originalBytes.toLocaleString()} 字节已精确还原 · ${result.plan.width} × ${result.plan.height}` : result.mime ? `原图 ${result.originalBytes.toLocaleString()} 字节已精确还原 · ${result.plan.width} × ${result.plan.height}` : `${result.plan.tileCount.toLocaleString()} 块已拼回 · 坐标验证通过 · ${result.plan.panels} 段自动拼接 · 已纠正 ${result.plan.corrected} 字节 · 恢复处理尺寸`;
+    entry.label = kind === 'encode' ? result.warning ? '已生成 · 这份 JPG 暂时无法还原' : result.isGif ? `完成 · ${result.gifFrames} 帧 · 原图可完整还原` : '完成 · JPG 还原验证通过'
+      : result.isGif ? `GIF 原图已完整还原 · ${result.plan.width} × ${result.plan.height}` : result.mime ? `原图已完整还原 · ${result.plan.width} × ${result.plan.height}` : `还原完成 · ${result.plan.width} × ${result.plan.height}`;
   } catch (error) {
     if (!current() || error.name === 'AbortError') return;
     entry.status = 'error'; entry.label = error.message; entry.result = null;
@@ -440,7 +441,7 @@ function setPreset(index, notify = true) {
     button.classList.toggle('is-active', active); button.setAttribute('aria-checked', String(active)); button.tabIndex = active ? 0 : -1;
   });
   const image = state.presetImages[index];
-  $('#custom-preset-hint').textContent = preset.filename ? `${preset.saved ? '已保存在此浏览器' : '仅本次可用'} · ${image.width} × ${image.height}` : '自定义预设会自动保存在此浏览器，下次直接选择。';
+  $('#custom-preset-hint').textContent = preset.filename ? `${preset.saved ? '已保存在这台设备' : '仅本次可用'} · ${image.width} × ${image.height}` : '新加的预设会保存在这台设备上。';
   $('#selected-preset-name').textContent = preset.name;
   if (notify && changed) settingsChanged();
 }

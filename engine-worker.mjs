@@ -177,7 +177,7 @@ async function encodeGifFile({ file, targetGif, target: staticTarget, settings }
       width: plan.outputWidth, height: plan.outputHeight, delay: outputDelays[index], minimum: 8, palette: null, disposal: 1,
     }));
     index += 1;
-    if ((index & 3) === 0 || index === source.frames.length) progress({ label: `匹配 GIF 动画帧 ${index}/${source.frames.length}`, fraction: 0.05 + index / source.frames.length * 0.82 });
+    if ((index & 3) === 0 || index === source.frames.length) progress({ label: `处理 GIF 第 ${index}/${source.frames.length} 帧`, fraction: 0.05 + index / source.frames.length * 0.82 });
   }
   const packedOriginal = await compressGifBytes(original); const useCompression = packedOriginal.length < original.length;
   const transformed = concatBytes([gifHeader(plan.outputWidth, plan.outputHeight, palette, target.loop), gifPayloadBlock(original.length, useCompression ? packedOriginal : original, useCompression), ...frames, Uint8Array.of(0x3b)]);
@@ -189,7 +189,7 @@ async function encodeGifFile({ file, targetGif, target: staticTarget, settings }
     sourcePreview: file, restoredPreview: file, targetPreview: targetGif ? new Blob([targetGif], { type: 'image/gif' }) : await previewBlob({ width: targetWidth, height: targetHeight, data: currentTarget.data }), targetWidth, targetHeight,
     gifFrames: source.frames.length, targetFrames: target.frames.length, originalBytes: original.length, sourceWidth, sourceHeight,
   };
-  progress({ label: 'GIF 混淆完成 · 原图可精确还原', fraction: 1 });
+  progress({ label: 'GIF 生成完成 · 原图可完整还原', fraction: 1 });
   return result;
 }
 
@@ -239,7 +239,7 @@ async function encodeStillAsGifFile({ file, targetGif, settings }, progress) {
       width: plan.outputWidth, height: plan.outputHeight, delay: frame.delay < 2 ? 10 : frame.delay, minimum: 8, palette: null, disposal: 1,
     }));
     index += 1;
-    if ((index & 3) === 0 || index === target.frames.length) progress({ label: `按 GIF 预设适配静态原图 ${index}/${target.frames.length}`, fraction: 0.05 + index / target.frames.length * 0.82 });
+    if ((index & 3) === 0 || index === target.frames.length) progress({ label: `按动画预设处理第 ${index}/${target.frames.length} 帧`, fraction: 0.05 + index / target.frames.length * 0.82 });
   }
   const packedOriginal = await compressGifBytes(original); const useCompression = packedOriginal.length < original.length;
   const transformed = concatBytes([gifHeader(plan.outputWidth, plan.outputHeight, palette, target.loop), gifPayloadBlock(original.length, useCompression ? packedOriginal : original, useCompression, mime), ...frames, Uint8Array.of(0x3b)]);
@@ -251,7 +251,7 @@ async function encodeStillAsGifFile({ file, targetGif, settings }, progress) {
     sourcePreview: file, restoredPreview: file, targetPreview: new Blob([targetGif], { type: 'image/gif' }), targetWidth, targetHeight,
     gifFrames: target.frames.length, targetFrames: target.frames.length, originalBytes: original.length, sourceWidth, sourceHeight,
   };
-  progress({ label: 'GIF 混淆完成 · 原图可精确还原', fraction: 1 });
+  progress({ label: 'GIF 生成完成 · 原图可完整还原', fraction: 1 });
   return result;
 }
 
@@ -285,7 +285,7 @@ async function encodeFile({ file, settings, target, targetGif, cached, compactPr
     if (!raw) {
       const options = processingOptions(settings, boosted);
       plan = createPlan(source.width, source.height, options);
-      if (plan.outputWidth * plan.outputHeight > 32000000 || Math.max(plan.outputWidth, plan.outputHeight) > 16384) throw new Error('混淆载体过大，请降低原图缩放比例或载体倍率（最多 3200 万像素、单边 16384 px）。');
+      if (plan.outputWidth * plan.outputHeight > 32000000 || Math.max(plan.outputWidth, plan.outputHeight) > 16384) throw new Error('图片尺寸太大。请在高级设置中缩小原图或降低混淆图放大倍数。');
       const encoded = await encodeImage(source, target, {
         ...options, skipSimilarity: true,
         onTiming: (stage, ms) => { timings[stage] = Math.round(ms); },
@@ -316,7 +316,7 @@ async function encodeFile({ file, settings, target, targetGif, cached, compactPr
     } catch (error) {
       if (!settings.manual && !boosted && plan.step < 24) {
         boosted = true; raw = null; targetImage = null;
-        progress({ label: '增强坐标保护后重试', fraction: 0.03 }); continue;
+        progress({ label: '提高 JPG 耐受性后重试', fraction: 0.03 }); continue;
       }
       warning = error.message;
     }
@@ -358,7 +358,7 @@ self.onmessage = async ({ data: message }) => {
       if (file.type === 'image/gif' || isGif(new Uint8Array(await file.slice(0, 6).arrayBuffer()))) {
         const restoredImage = await restoreEmbeddedImage(file);
         if (restoredImage) {
-          onProgress({ label: '内嵌原图精确还原完成', fraction: 1 });
+          onProgress({ label: 'GIF 原图已完整还原', fraction: 1 });
           self.postMessage({ id, type: 'result', result: restoredImage });
           return;
         }

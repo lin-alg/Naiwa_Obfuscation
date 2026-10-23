@@ -29,10 +29,11 @@ export function initializePreviews() {
     for (const panel of panels) {
       const viewport = panel.querySelector('.canvas-viewport'); const image = visual(viewport); const stage = panel.querySelector('.canvas-stage'); const size = dimensions(image);
       if (!size.width || !size.height || !viewport || !stage) continue;
-      const scale = zoomState(viewport).factor ?? fitScale(panel);
+      const fit = fitScale(panel); const scale = zoomState(viewport).factor ?? fit;
       const width = Math.max(1, size.width * scale); const height = Math.max(1, size.height * scale);
       image.style.width = `${width}px`; image.style.height = `${height}px`;
       stage.style.width = `${Math.max(viewport.clientWidth, width)}px`; stage.style.height = `${Math.max(viewport.clientHeight, height)}px`;
+      viewport.style.touchAction = scale > fit * 1.001 ? 'none' : 'pan-y';
     }
     if (anchor) {
       const { viewport, image, x, y, imageX, imageY } = anchor; const size = dimensions(image);
@@ -82,7 +83,11 @@ export function initializePreviews() {
     let drag = null;
     viewport.addEventListener('pointerenter', () => { if (!viewport.closest('.decode-preview')) { activeViewport = viewport; readout(viewport); } });
     viewport.addEventListener('pointerdown', event => {
-      if (event.pointerType !== 'mouse' || event.button !== 0 || !dimensions(visual(viewport)).width) return;
+      if (event.button !== 0 || !dimensions(visual(viewport)).width) return;
+      if (event.pointerType === 'touch') {
+        const panel = viewport.closest('.preview-panel'); const fit = fitScale(panel);
+        if ((zoomState(viewport).factor ?? fit) <= fit * 1.001) return;
+      }
       drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
       viewport.setPointerCapture(event.pointerId); viewport.classList.add('is-panning'); event.preventDefault();
     });
