@@ -4,13 +4,23 @@ import { sourceSizing } from './image-sizing.mjs';
 export const carrierScaleForTile = tile => Math.max(1, Math.min(8, Math.round(16 / tile * 2) / 2));
 export const carrierScale = settings => settings.autoCarrier ? carrierScaleForTile(settings.tileSize) : settings.carrierScale;
 
+export function conversionDefaults(settings, animatedOutput) {
+  return { ...settings, balance: animatedOutput ? 100 : 50, tileSize: animatedOutput ? 2 : 8 };
+}
+
+export function balancePreference(balance) {
+  const value = Math.max(0, Math.min(100, Number(balance))) / 100;
+  // Keep both endpoints while moving the former 75% balance point to center.
+  return value <= 0.5 ? value * 1.5 : 0.75 + (value - 0.5) * 0.5;
+}
+
 export function processingSize(width, height, settings) {
   return sourceSizing(width, height, settings.autoResize ? null : settings.sourceScale,
     Math.min(16000000, 31000000 / carrierScale(settings) ** 2));
 }
 
 export function processingOptions(settings, recoveryBoost = false) {
-  const preference = Math.max(0, Math.min(100, settings.balance)) / 100;
+  const preference = balancePreference(settings.balance);
   const compression = settings.quality < 60 ? 28 : settings.quality < 65 ? 24 : 12;
   return {
     tileSize: settings.tileSize, scale: carrierScale(settings),

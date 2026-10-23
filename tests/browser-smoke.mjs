@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { gunzipSync } from 'node:zlib';
 import { artifactDirectory, artifactEnvironment } from './artifact-paths.mjs';
 import { decode, png } from './image-io.mjs';
-import { embeddedImagePayload, parseGif } from '../gif-codec.mjs';
+import { embeddedImagePayload, parseGif } from '../src/gif-codec.mjs';
 
 const chrome = process.env.CHROME_EXECUTABLE ?? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const testUrl = process.env.NAIWA_TEST_URL ?? 'http://127.0.0.1:4173/';
@@ -144,6 +144,13 @@ try {
     const viewportFit = await evaluate(`(() => {const workbench=document.querySelector('#encode-view .workbench').getBoundingClientRect(),controls=document.querySelector('#encode-view .controls').getBoundingClientRect(),footer=document.querySelector('.site-footer').getBoundingClientRect();return {viewport:innerHeight,bodyHeight:document.body.clientHeight,bodyScroll:document.body.scrollHeight,documentWidth:document.documentElement.scrollWidth,overflowY:getComputedStyle(document.documentElement).overflowY,scrollY:window.scrollY,previewHidden:document.querySelector('#preview-area').hidden,workbenchBottom:Math.round(workbench.bottom),controlsBottom:Math.round(controls.bottom),footerTop:Math.round(footer.top)}})()`);
     if (viewportFit.bodyScroll > viewportFit.bodyHeight + 1 || viewportFit.documentWidth > width + 1 || viewportFit.overflowY !== 'hidden' || viewportFit.scrollY !== 0 || !viewportFit.previewHidden || viewportFit.controlsBottom > viewportFit.workbenchBottom + 1 || viewportFit.workbenchBottom > viewportFit.footerTop + 1) throw new Error(`Desktop start view overflows at ${width}x${height}: ${JSON.stringify(viewportFit)}`);
   }
+  if (!await evaluate(`document.querySelector('#advanced-settings').parentElement.classList.contains('basic-settings')`)) throw new Error('Advanced settings must be inside output options');
+  await evaluate(`document.querySelector('#advanced-settings').open=true`);
+  await waitFor('document.body.classList.contains("has-advanced-settings")');
+  const expandedDesktop = await evaluate(`({overflowY:getComputedStyle(document.documentElement).overflowY,documentHeight:document.documentElement.scrollHeight,viewport:innerHeight,contentHeight:document.querySelector('#advanced-settings').getBoundingClientRect().height,contentWidth:document.querySelector('#advanced-settings').getBoundingClientRect().width})`);
+  if (expandedDesktop.overflowY !== 'auto' || expandedDesktop.contentWidth < 400 || expandedDesktop.contentHeight < 300 || expandedDesktop.documentHeight <= expandedDesktop.viewport) throw new Error(`Expanded desktop settings should use the output column and page scrolling: ${JSON.stringify(expandedDesktop)}`);
+  await evaluate(`document.querySelector('#advanced-settings').open=false`);
+  await waitFor('!document.body.classList.contains("has-advanced-settings")');
   await command('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   const mobileLayout = await evaluate(`({ viewport: window.innerWidth, document: document.documentElement.scrollWidth, height: window.innerHeight, documentHeight: document.documentElement.scrollHeight, controls: document.querySelector('.controls').getBoundingClientRect().width, presets: document.querySelector('#preset-list').getBoundingClientRect().width })`);
   if (mobileLayout.document > mobileLayout.viewport || mobileLayout.documentHeight > mobileLayout.height + 1) throw new Error(`Initial mobile layout overflows or scrolls: ${JSON.stringify(mobileLayout)}`);
@@ -158,14 +165,20 @@ try {
   await evaluate(`document.querySelector('.preset-option[data-index="0"]').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}))`);
   if (!await evaluate(`document.querySelector('.preset-option[data-index="1"]').getAttribute('aria-checked') === 'true'`)) throw new Error('Preset keyboard navigation failed');
   await evaluate(`document.querySelector('.preset-option[data-index="1"]').dispatchEvent(new KeyboardEvent('keydown',{key:'Home',bubbles:true}))`);
-  const smokeImage = await decode(fileURLToPath(new URL('../test/static/4.jpg', import.meta.url)), 640, 360, 'scale=640:360:flags=area');
+  await evaluate(`document.querySelector('.preset-option[data-index="4"]').click()`);
+  const animatedPresetDefaults = await evaluate(`({balance:document.querySelector('#balance').value,tileSize:document.querySelector('#tile-size').value})`);
+  if (animatedPresetDefaults.balance !== '100' || animatedPresetDefaults.tileSize !== '2') throw new Error(`Animated output preset should default to 2px / preset-focused: ${JSON.stringify(animatedPresetDefaults)}`);
+  await evaluate(`document.querySelector('.preset-option[data-index="0"]').click()`);
+  const staticDefaults = await evaluate(`({balance:document.querySelector('#balance').value,tileSize:document.querySelector('#tile-size').value,label:document.querySelector('#balance-value').value})`);
+  if (staticDefaults.balance !== '50' || staticDefaults.tileSize !== '8' || staticDefaults.label !== '两边兼顾') throw new Error(`Static output should default to the calibrated midpoint: ${JSON.stringify(staticDefaults)}`);
+  const smokeImage = await decode(fileURLToPath(new URL('./fixtures/static/4.jpg', import.meta.url)), 640, 360, 'scale=640:360:flags=area');
   const inputFile = join(temporaryRoot, 'test-photo.png');
   await writeFile(inputFile, await png(smokeImage, 640));
   const userPageControls = await evaluate(`({benchmarkTab:document.querySelector('[data-view="benchmark"]'),benchmarkWidgets:document.querySelectorAll('#benchmark-button,#benchmark-chart,#preset-chart').length})`);
   if (userPageControls.benchmarkTab || userPageControls.benchmarkWidgets) throw new Error('Developer-only benchmark controls are exposed on the user page');
   if (await evaluate('document.querySelectorAll("input[type=password]").length')) throw new Error('Password controls remain');
-  const basicMode = await evaluate(`({advancedClosed: !document.querySelector('#advanced-settings').open, manual: document.querySelector('#manual-parameters').checked, quality: document.querySelector('#jpg-quality').value, tileType: document.querySelector('#tile-size').type, tile: document.querySelector('#tile-size').value, autoCarrier: document.querySelector('#auto-carrier').checked, carrierDisabled: document.querySelector('#carrier-scale').disabled, button: document.querySelector('#download-button').textContent})`);
-  if (!basicMode.advancedClosed || basicMode.manual || basicMode.quality !== '75' || basicMode.tileType !== 'range' || basicMode.tile !== '8' || !basicMode.autoCarrier || !basicMode.carrierDisabled || !basicMode.button.includes('JPG')) throw new Error(`Incorrect basic defaults: ${JSON.stringify(basicMode)}`);
+  const basicMode = await evaluate(`({advancedClosed: !document.querySelector('#advanced-settings').open, manual: document.querySelector('#manual-parameters').checked, quality: document.querySelector('#jpg-quality').value, balance: document.querySelector('#balance').value, balanceLabel: document.querySelector('#balance-value').value, tileType: document.querySelector('#tile-size').type, tile: document.querySelector('#tile-size').value, autoCarrier: document.querySelector('#auto-carrier').checked, carrierDisabled: document.querySelector('#carrier-scale').disabled, button: document.querySelector('#download-button').textContent})`);
+  if (!basicMode.advancedClosed || basicMode.manual || basicMode.quality !== '75' || basicMode.balance !== '50' || basicMode.balanceLabel !== '两边兼顾' || basicMode.tileType !== 'range' || basicMode.tile !== '8' || !basicMode.autoCarrier || !basicMode.carrierDisabled || !basicMode.button.includes('JPG')) throw new Error(`Incorrect basic defaults: ${JSON.stringify(basicMode)}`);
   const carrierPairing = await evaluate(`(() => {const tile=document.querySelector('#tile-size');tile.value='4';tile.dispatchEvent(new Event('input'));const fine=document.querySelector('#carrier-scale').value;tile.value='8';tile.dispatchEvent(new Event('input'));return {fine,restored:document.querySelector('#carrier-scale').value,hint:document.querySelector('#tile-size-hint').textContent,choices:document.querySelector('#carrier-scale').options.length}})()`);
    if (carrierPairing.fine !== '4' || carrierPairing.restored !== '2' || carrierPairing.choices !== 15 || !carrierPairing.hint.includes('调小后')) throw new Error(`Automatic carrier pairing is incorrect: ${JSON.stringify(carrierPairing)}`);
   await setInputFile('#source-file', inputFile);
@@ -269,7 +282,7 @@ try {
   if (!(rawPngBytes > adjustedBytes)) throw new Error('Expected compressed JPG to be smaller than the raw PNG');
   const pngUrl = '/' + relative(fileURLToPath(new URL('../', import.meta.url)), pngPath).split(sep).join('/');
   const compressionComparison = await evaluate(`(async () => {
-    const {restoreImage,imageSimilarity}=await import('./core.mjs');
+    const {restoreImage,imageSimilarity}=await import('./src/core.mjs');
     const png=await (await fetch(${JSON.stringify(pngUrl)})).blob();
     const bitmap=await createImageBitmap(png);
     const canvas=document.createElement('canvas');canvas.width=bitmap.width;canvas.height=bitmap.height;
@@ -299,7 +312,7 @@ try {
   console.log(`preference endpoints: quality-first SSIM ${qualityPriorityScore} vs preset-first ${presetPriority.restored}; preset-first outline ${presetPriority.outline} vs quality-first ${priorityScores.preset}`);
   // Benchmark the standard balanced profile after checking automatic re-generation.
   await evaluate('document.querySelector("#balance").value=50; document.querySelector("#balance").dispatchEvent(new Event("input"))');
-   await waitFor('document.querySelector("#applied-options").textContent.includes("8 px 图块") && document.querySelector("#applied-options").textContent.includes("保留 75%") && document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
+   await waitFor('document.querySelector("#applied-options").textContent.includes("8 px 图块") && document.querySelector("#applied-options").textContent.includes("保留 50%") && document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
 
   const makeFixture = async (name, width, height, transparent = false) => {
     const data = new Uint8ClampedArray(width * height * 4);
@@ -466,14 +479,14 @@ try {
   if (!await evaluate(`document.querySelector('#encode-button').disabled&&document.querySelector('#decode-button').disabled&&document.querySelector('#preview-area').hidden`)) throw new Error('Removing the final batch entry did not reset the view');
   console.log('batch passed: unified/independent presets and settings, cancellation, progress, previews, single downloads, JPG/PNG ZIPs, partial failure and 320/390/768px layouts');
 
-  const gifInput = fileURLToPath(new URL('../test/animated/2.gif', import.meta.url));
+  const gifInput = fileURLToPath(new URL('./fixtures/animated/2.gif', import.meta.url));
   const gifOriginal = await readFile(gifInput); const beforeGifDownload = finishedDownloads.length;
   await setInputFile('#source-file', gifInput);
   await waitFor(`document.querySelector('#source-list .batch-item')?.dataset.status==='idle'&&document.querySelector('#source-meta').textContent.includes('2.gif')`);
   await evaluate(`document.querySelector('.preset-option[data-index="4"]').click();document.querySelector('#advanced-settings').open=true;document.querySelector('#encode-button').click()`);
   await waitFor(`document.querySelector('#result-summary').textContent.includes('原图可完整还原')`, 240000);
   const gifMetrics = await evaluate(`({summary:document.querySelector('#result-summary').textContent,preset:document.querySelector('#preset-score').textContent,dimensions:document.querySelector('#mosaic-preview').width+'x'+document.querySelector('#mosaic-preview').height,animated:!!document.querySelector('[data-panel="mosaic"] .preview-animation:not([hidden])')&&document.querySelector('[data-panel="mosaic"] .preview-animation').naturalWidth>0,animatedDimensions:document.querySelector('[data-panel="mosaic"] .preview-animation')?.naturalWidth+'x'+document.querySelector('[data-panel="mosaic"] .preview-animation')?.naturalHeight,qualityDisabled:document.querySelector('#jpg-quality').disabled,carrierDisabled:document.querySelector('#carrier-scale').disabled,bytes:Number(document.querySelector('#output-size').dataset.bytes)})`);
-  const originalGif = parseGif(gifOriginal); const selectedGifPreset = parseGif(await readFile(fileURLToPath(new URL('../images/animated/1.gif', import.meta.url)))); const gifDownload = Date.now();
+  const originalGif = parseGif(gifOriginal); const selectedGifPreset = parseGif(await readFile(fileURLToPath(new URL('../assets/images/animated/1.gif', import.meta.url)))); const gifDownload = Date.now();
   await evaluate(`document.querySelector('#download-button').click()`);
   while (finishedDownloads.length < beforeGifDownload + 1 && Date.now() - gifDownload < 20000) await new Promise(resolve => setTimeout(resolve, 100));
   if (finishedDownloads.length < beforeGifDownload + 1) throw new Error('Obfuscated GIF download did not complete');
@@ -495,12 +508,12 @@ try {
   await evaluate(`document.querySelector('.preset-option[data-index="0"]').click();document.querySelector('#encode-button').click()`);
   await waitFor(`document.querySelector('#preset-score').textContent.includes('共 1 帧')&&document.querySelector('#result-summary').textContent.includes('原图可完整还原')`, 240000);
   if (!await evaluate(`document.querySelector('#preset-score').textContent.includes('逐帧平均')`)) throw new Error('GIF encoding with a static preset failed');
-  const staticTiming = await evaluate(`(async()=>{const image=document.querySelector('[data-panel="mosaic"] .preview-animation');const {parseGif}=await import('./gif-codec.mjs');const gif=parseGif(new Uint8Array(await (await fetch(image.src)).arrayBuffer()));return {duration:gif.duration,loop:gif.loop,frames:gif.frames.length}})()`);
+  const staticTiming = await evaluate(`(async()=>{const image=document.querySelector('[data-panel="mosaic"] .preview-animation');const {parseGif}=await import('./src/gif-codec.mjs');const gif=parseGif(new Uint8Array(await (await fetch(image.src)).arrayBuffer()));return {duration:gif.duration,loop:gif.loop,frames:gif.frames.length}})()`);
   if (staticTiming.duration !== originalGif.duration || staticTiming.loop !== originalGif.loop) throw new Error(`Static preset should preserve source animation timing and loop behavior: ${JSON.stringify(staticTiming)}`);
   console.log('GIF encoding with a static image preset passed');
   const gifSamples = [];
   for (const [sample, preset] of [['1.gif', 5], ['3.gif', 4]]) {
-    const inputPath = fileURLToPath(new URL(`../test/animated/${sample}`, import.meta.url));
+    const inputPath = fileURLToPath(new URL(`./fixtures/animated/${sample}`, import.meta.url));
     const inputBytes = await readFile(inputPath); const sourceGif = parseGif(inputBytes); const beforeDownload = finishedDownloads.length;
     await setInputFile('#source-file', inputPath);
     await waitFor(`document.querySelector('#source-list .batch-item')?.dataset.status==='idle'&&document.querySelector('#source-meta').textContent.includes('${sample}')`);
@@ -512,7 +525,7 @@ try {
     while (finishedDownloads.length < beforeDownload + 1 && Date.now() - downloadDeadline < 20000) await new Promise(resolve => setTimeout(resolve, 100));
     const outputPath = join(downloads, `${sample.replace('.gif', '')}-obfuscated.gif`); const outputBytes = await readFile(outputPath); const outputGif = parseGif(outputBytes);
     const outline = Number(resultMetrics.preset.match(/轮廓 ([0-9.]+)/)?.[1]); const ratio = outputBytes.length / inputBytes.length;
-    const targetPath = fileURLToPath(new URL(`../images/animated/${preset === 4 ? '1' : '2'}.gif`, import.meta.url));
+    const targetPath = fileURLToPath(new URL(`../assets/images/animated/${preset === 4 ? '1' : '2'}.gif`, import.meta.url));
     const targetGif = parseGif(await readFile(targetPath));
     const followsPreset = outputGif.duration === targetGif.duration && outputGif.loop === targetGif.loop;
     if (outputGif.frames.length !== sourceGif.frames.length || !followsPreset || resultMetrics.frames !== sourceGif.frames.length || resultMetrics.bytes !== outputBytes.length || ratio > 3 || outline < 0.5) {
@@ -525,16 +538,16 @@ try {
   const staticOriginal = await readFile(smallPath); const beforeStillGifDownload = finishedDownloads.length;
   await setInputFile('#source-file', smallPath);
   await waitFor(`document.querySelector('#source-list .batch-item')?.dataset.status==='idle'&&document.querySelector('#source-meta').textContent.includes('small-source.png')`);
-  await evaluate(`document.querySelector('.preset-option[data-index="4"]').click();document.querySelector('#balance').value=50;document.querySelector('#balance').dispatchEvent(new Event('input'));document.querySelector('#encode-button').click()`);
+  await evaluate(`document.querySelector('.preset-option[data-index="4"]').click();document.querySelector('#balance').value=100;document.querySelector('#balance').dispatchEvent(new Event('input'));document.querySelector('#tile-size').value=2;document.querySelector('#tile-size').dispatchEvent(new Event('input'));document.querySelector('#encode-button').click()`);
   await waitFor(`document.querySelector('#result-summary').textContent.includes('GIF 100 帧')&&document.querySelector('#result-summary').textContent.includes('原图可完整还原')`, 240000);
   const stillGifMetrics = await evaluate(`({preset:document.querySelector('#preset-score').textContent,options:document.querySelector('#applied-options').textContent,bytes:Number(document.querySelector('#output-size').dataset.bytes),animated:!!document.querySelector('[data-panel="mosaic"] .preview-animation:not([hidden])'),restored:document.querySelector('#restored-score').textContent})`);
   await evaluate(`document.querySelector('#download-button').click()`);
   const stillGifDownload = Date.now();
   while (finishedDownloads.length < beforeStillGifDownload + 1 && Date.now() - stillGifDownload < 20000) await new Promise(resolve => setTimeout(resolve, 100));
   const stillGifPath = join(downloads, 'small-source-obfuscated.gif'); const stillGifBytes = await readFile(stillGifPath); const stillGif = parseGif(stillGifBytes);
-  const stillPayload = embeddedImagePayload(stillGif); const targetStillGif = parseGif(await readFile(fileURLToPath(new URL('../images/animated/1.gif', import.meta.url))));
+  const stillPayload = embeddedImagePayload(stillGif); const targetStillGif = parseGif(await readFile(fileURLToPath(new URL('../assets/images/animated/1.gif', import.meta.url))));
   const stillPresetScore = Number(stillGifMetrics.preset.match(/轮廓 ([0-9.]+)/)?.[1]);
-  if (stillPayload?.mime !== 'image/png' || !gunzipSync(stillPayload.compressed).equals(staticOriginal) || stillGif.duration !== targetStillGif.duration || stillGif.loop !== targetStillGif.loop || stillGif.frames.length !== targetStillGif.frames.length || !stillGifMetrics.animated || !stillGifMetrics.restored.includes('静态图') || !stillGifMetrics.options.includes('保留 75%') || stillPresetScore < 0.5) {
+  if (stillPayload?.mime !== 'image/png' || !gunzipSync(stillPayload.compressed).equals(staticOriginal) || stillGif.duration !== targetStillGif.duration || stillGif.loop !== targetStillGif.loop || stillGif.frames.length !== targetStillGif.frames.length || !stillGifMetrics.animated || !stillGifMetrics.restored.includes('静态图') || !stillGifMetrics.options.includes('保留 25%') || stillPresetScore < 0.5) {
     throw new Error(`Static source to animated preset GIF failed: ${JSON.stringify({ ...stillGifMetrics, frames: stillGif.frames.length, duration: stillGif.duration, targetDuration: targetStillGif.duration, loop: stillGif.loop, targetLoop: targetStillGif.loop, mime: stillPayload?.mime })}`);
   }
   const beforeStillRestoreDownload = finishedDownloads.length;
@@ -566,6 +579,14 @@ try {
     console.log(`interactive report passed: ${JSON.stringify(reportState)}`);
     await screenshot('naiwa-report-compare.png');
   }
+  await command('Page.reload', { ignoreCache: true });
+  await waitFor('document.querySelectorAll(".preset-option").length === 6 && !document.querySelector("#custom-preset-picker").disabled');
+  await evaluate(`document.querySelector('.preset-option[data-index="0"]').click()`);
+  const resetStaticDefaults = await evaluate(`({balance:document.querySelector('#balance').value,tileSize:document.querySelector('#tile-size').value})`);
+  if (resetStaticDefaults.balance !== '50' || resetStaticDefaults.tileSize !== '8') throw new Error(`Reloaded static defaults are incorrect: ${JSON.stringify(resetStaticDefaults)}`);
+  await setInputFile('#source-file', gifInput);
+  const gifSourceDefaults = await waitFor(`document.querySelector('#source-meta').textContent.includes('2.gif') && document.querySelector('#balance').value === '100' && document.querySelector('#tile-size').value === '2'`);
+  if (!gifSourceDefaults) throw new Error('GIF source with a static preset must default to 2px / preset-focused');
   if (pageErrors.length) throw new Error(`Browser runtime errors: ${pageErrors.join(' | ')}`);
 
   console.log(`browser smoke passed: ${encodedSummary}; ${restoredMessage}; zoom=${JSON.stringify(zoomBehavior)}; profiles=${profile}`);

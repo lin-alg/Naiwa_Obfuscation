@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { encodeImage, imageSimilarity, restoreImage } from '../core.mjs';
+import { encodeImage, imageSimilarity, restoreImage } from '../src/core.mjs';
 import { decode, jpeg } from './image-io.mjs';
 
 const maxSide = Number(process.argv.find((value) => value.startsWith('--max-side='))?.slice(11) ?? 768);
-const manifest = JSON.parse(await readFile(new URL('../test/manifest.json', import.meta.url), 'utf8'));
-const preset = await decode(fileURLToPath(new URL('../images/static/奶蛙.png', import.meta.url)), 512, 512);
+const manifest = JSON.parse(await readFile(new URL('./fixtures/manifest.json', import.meta.url), 'utf8'));
+const preset = await decode(fileURLToPath(new URL('../assets/images/static/奶蛙.png', import.meta.url)), 512, 512);
 const results = [];
 
 for (const entry of manifest) {
   const scale = Math.min(1, maxSide / Math.max(entry.width, entry.height));
   const width = Math.max(1, Math.round(entry.width * scale));
   const height = Math.max(1, Math.round(entry.height * scale));
-  const source = await decode(fileURLToPath(new URL(`../test/static/${entry.name}`, import.meta.url)), width, height,
+  const source = await decode(fileURLToPath(new URL(`./fixtures/static/${entry.name}`, import.meta.url)), width, height,
     scale < 1 ? `scale=${width}:${height}:flags=area` : undefined);
   const started = performance.now();
   const encoded = await encodeImage(source, preset, { tileSize: 8, scale: 2, step: 16 });

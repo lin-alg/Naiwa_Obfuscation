@@ -65,11 +65,51 @@
               <div class="field-line spaced-label"><label class="field-label" for="balance">效果偏向</label><output id="balance-value" for="balance">两边兼顾</output></div>
               <input id="balance" type="range" min="0" max="100" step="1" value="50" aria-describedby="balance-hint">
               <div class="range-labels preference-labels"><span>还原细节更多</span><span>更像所选预设</span></div>
-              <p class="field-hint" id="balance-hint">往左调，还原图会保留更多原图细节；往右调，混淆图会更接近所选预设。</p>
+              <p class="field-hint" id="balance-hint">中点兼顾还原细节和预设外观；向两端移动会分别偏向还原效果或预设外观。</p>
               <div class="field-line spaced-label"><label class="field-label" for="tile-size">预设图案细节</label><output id="tile-size-value" for="tile-size">8 px</output></div>
               <input id="tile-size" type="range" min="2" max="16" step="1" value="8" aria-describedby="tile-size-hint">
               <div class="range-labels"><span>更清楚</span><span>更简洁</span></div>
               <p class="field-hint" id="tile-size-hint">调小后，混淆图里的预设图案更清楚；文件会更大，处理也更慢。</p>
+              <details class="advanced-settings" id="advanced-settings">
+                <summary>高级设置<span id="advanced-mode-label">尺寸与效果微调</span></summary>
+                <div class="advanced-content">
+                  <label class="checkbox-label"><input id="auto-resize" type="checkbox" checked>按原图自动调整处理尺寸</label>
+                  <div class="field-line"><label class="field-label" for="source-scale">处理尺寸比例</label><output id="source-scale-value" for="source-scale">自动</output></div>
+                  <input id="source-scale" class="text-input" type="number" min="1" max="1600" step="0.1" value="100" disabled>
+                  <p class="field-hint" id="source-size-hint">自动目标：短边至少 1024、长边至多 2960 px。极端长图优先限制长边。还原得到处理尺寸。</p>
+                  <p class="field-hint advanced-explainer">混淆图会按此倍率放大；自动模式会根据分块大小选择合适倍率。</p>
+                  <label class="checkbox-label"><input id="auto-carrier" type="checkbox" checked>按分块大小自动选择倍率</label>
+                  <label class="field-label" for="carrier-scale">混淆图放大倍数</label>
+                  <select id="carrier-scale" class="text-input">
+                    <option value="1">1 倍</option><option value="1.5">1.5 倍</option><option value="2" selected>2 倍</option><option value="2.5">2.5 倍</option><option value="3">3 倍</option><option value="3.5">3.5 倍</option><option value="4">4 倍</option><option value="4.5">4.5 倍</option><option value="5">5 倍</option><option value="5.5">5.5 倍</option><option value="6">6 倍</option><option value="6.5">6.5 倍</option><option value="7">7 倍</option><option value="7.5">7.5 倍</option><option value="8">8 倍</option>
+                  </select>
+                  <p class="field-hint" id="carrier-scale-hint">自动选择可避免放大倍数过低。关闭后可手选 1–8 倍；倍率过低可能无法还原。</p>
+                  <label class="checkbox-label spaced-label"><input id="manual-parameters" type="checkbox">自定义高级参数</label>
+                  <p class="field-hint">默认设置适合大多数图片。需要单独调整预设外观、还原细节或压缩耐受性时再开启。</p>
+                  <fieldset id="manual-fields" disabled>
+                    <label class="field-label spaced-label" for="color-adapt">按预设调整颜色</label>
+                    <select id="color-adapt" class="text-input"><option value="yes">更贴近预设颜色</option><option value="no">保留原图颜色</option></select>
+                    <p class="field-hint">选择更贴近预设时，还原仍会尽量找回原图颜色。</p>
+                    <label class="field-label spaced-label" for="color-gain">原图细节保留</label>
+                    <select id="color-gain" class="text-input"><option value="1">100% · 全部保留</option><option value="0.75" selected>75% · 两边兼顾</option><option value="0.5">50% · 更像预设</option><option value="0.25">25% · 尽量贴近预设</option></select>
+                    <p class="field-hint">比例越高，还原图越接近原图；比例越低，混淆图越接近所选预设。</p>
+                    <label class="field-label spaced-label" for="preset-fit">预设图显示方式</label>
+                    <select id="preset-fit" class="text-input"><option value="contain">完整显示 · 周围留白</option><option value="cover">铺满 · 居中裁切</option><option value="stretch">拉伸铺满</option></select>
+                    <p class="field-hint">完整显示不裁图；铺满会裁掉边缘；拉伸会改变预设比例。</p>
+                    <p class="field-hint">长宽比超过 3:1 时沿长边分段处理，还原时自动拼接。JPG 将透明背景合成为白色。</p>
+                    <div class="field-line spaced-label"><label class="field-label" for="strength">JPG 耐压缩程度</label><output id="strength-value" for="strength">16</output></div>
+                    <input id="strength" type="range" min="4" max="40" step="2" value="16">
+                    <div class="range-labels"><span>纹理更少</span><span>更容易还原</span></div>
+                    <p class="field-hint">调高后，JPG 压缩后更容易还原；画面上的细微纹理也会更明显。</p>
+                  </fieldset>
+                  <div class="advanced-stats" aria-live="polite">
+                    <p id="applied-options">生成后显示实际使用的设置</p>
+                    <p id="preset-score">混淆图与预设的相似度评分（越高越像）</p>
+                    <p id="restore-metrics">生成后显示还原效果</p>
+                  </div>
+                  <button class="quiet-button wide-button" id="download-png" type="button" disabled>另存压缩前 PNG</button>
+                </div>
+              </details>
             </section>
 
             <div class="generate-actions">
@@ -78,47 +118,6 @@
               <p class="field-hint batch-summary" id="encode-batch-summary" role="status"></p>
               <p class="field-hint" id="generation-hint">先用默认设置生成，再按效果调整。</p>
             </div>
-
-            <details class="advanced-settings" id="advanced-settings">
-              <summary>高级设置<span id="advanced-mode-label">尺寸与效果微调</span></summary>
-              <div class="advanced-content">
-              <label class="checkbox-label"><input id="auto-resize" type="checkbox" checked>按原图自动调整处理尺寸</label>
-              <div class="field-line"><label class="field-label" for="source-scale">处理尺寸比例</label><output id="source-scale-value" for="source-scale">自动</output></div>
-              <input id="source-scale" class="text-input" type="number" min="1" max="1600" step="0.1" value="100" disabled>
-              <p class="field-hint" id="source-size-hint">自动目标：短边至少 1024、长边至多 2960 px。极端长图优先限制长边。还原得到处理尺寸。</p>
-              <p class="field-hint advanced-explainer">混淆图会按此倍率放大；自动模式会根据分块大小选择合适倍率。</p>
-              <label class="checkbox-label"><input id="auto-carrier" type="checkbox" checked>按分块大小自动选择倍率</label>
-              <label class="field-label" for="carrier-scale">混淆图放大倍数</label>
-              <select id="carrier-scale" class="text-input">
-                <option value="1">1 倍</option><option value="1.5">1.5 倍</option><option value="2" selected>2 倍</option><option value="2.5">2.5 倍</option><option value="3">3 倍</option><option value="3.5">3.5 倍</option><option value="4">4 倍</option><option value="4.5">4.5 倍</option><option value="5">5 倍</option><option value="5.5">5.5 倍</option><option value="6">6 倍</option><option value="6.5">6.5 倍</option><option value="7">7 倍</option><option value="7.5">7.5 倍</option><option value="8">8 倍</option>
-              </select>
-              <p class="field-hint" id="carrier-scale-hint">自动选择可避免放大倍数过低。关闭后可手选 1–8 倍；倍率过低可能无法还原。</p>
-              <label class="checkbox-label spaced-label"><input id="manual-parameters" type="checkbox">自定义高级参数</label>
-              <p class="field-hint">默认设置适合大多数图片。需要单独调整预设外观、还原细节或压缩耐受性时再开启。</p>
-              <fieldset id="manual-fields" disabled>
-              <label class="field-label spaced-label" for="color-adapt">按预设调整颜色</label>
-              <select id="color-adapt" class="text-input"><option value="yes">更贴近预设颜色</option><option value="no">保留原图颜色</option></select>
-              <p class="field-hint">选择更贴近预设时，还原仍会尽量找回原图颜色。</p>
-              <label class="field-label spaced-label" for="color-gain">原图细节保留</label>
-               <select id="color-gain" class="text-input"><option value="1">100% · 全部保留</option><option value="0.75" selected>75% · 两边兼顾</option><option value="0.5">50% · 更像预设</option><option value="0.25">25% · 尽量贴近预设</option></select>
-              <p class="field-hint">比例越高，还原图越接近原图；比例越低，混淆图越接近所选预设。</p>
-              <label class="field-label spaced-label" for="preset-fit">预设图显示方式</label>
-              <select id="preset-fit" class="text-input"><option value="contain">完整显示 · 周围留白</option><option value="cover">铺满 · 居中裁切</option><option value="stretch">拉伸铺满</option></select>
-              <p class="field-hint">完整显示不裁图；铺满会裁掉边缘；拉伸会改变预设比例。</p>
-              <p class="field-hint">长宽比超过 3:1 时沿长边分段处理，还原时自动拼接。JPG 将透明背景合成为白色。</p>
-              <div class="field-line spaced-label"><label class="field-label" for="strength">JPG 耐压缩程度</label><output id="strength-value" for="strength">16</output></div>
-              <input id="strength" type="range" min="4" max="40" step="2" value="16">
-              <div class="range-labels"><span>纹理更少</span><span>更容易还原</span></div>
-              <p class="field-hint">调高后，JPG 压缩后更容易还原；画面上的细微纹理也会更明显。</p>
-              </fieldset>
-              <div class="advanced-stats" aria-live="polite">
-                <p id="applied-options">生成后显示实际使用的设置</p>
-                <p id="preset-score">混淆图与预设的相似度评分（越高越像）</p>
-                <p id="restore-metrics">生成后显示还原效果</p>
-              </div>
-              <button class="quiet-button wide-button" id="download-png" type="button" disabled>另存压缩前 PNG</button>
-              </div>
-            </details>
 
             <p class="privacy-note">图片只在此设备处理，不会上传。还原图为处理尺寸；JPG 不保留透明背景，并可能有少量压缩误差。</p>
           </aside>
@@ -212,6 +211,6 @@
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
     <footer class="site-footer"><span>Naiwa · GPL-3.0-or-later</span><span>图片只在本机处理</span></footer>
-    <script type="module" src="./app.mjs"></script>
+    <script type="module" src="./src/app.mjs"></script>
   </body>
 </html>

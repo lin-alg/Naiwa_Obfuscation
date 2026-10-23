@@ -46,10 +46,10 @@ try {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   await evaluate(`window.benchmark=async function(index){
-    const {processingSize,processingOptions}=await import('./processing-settings.mjs');
+    const {processingSize,processingOptions}=await import('./src/processing-settings.mjs');
     const settings={quality:75,balance:50,tileSize:8,autoResize:true,sourceScale:100,autoCarrier:true,carrierScale:2,manual:false,strength:16,fit:'contain',colorAdapt:true,colorGain:0.75};
-    const file=await (await fetch('./test/static/'+index+'.jpg')).blob();
-    const targetBlob=await (await fetch('./images/static/%E5%A5%B6%E8%9B%99.png')).blob();
+    const file=await (await fetch('./tests/fixtures/static/'+index+'.jpg')).blob();
+    const targetBlob=await (await fetch('./assets/images/static/%E5%A5%B6%E8%9B%99.png')).blob();
     async function read(blob,size){const bitmap=await createImageBitmap(blob);const dims=size?.(bitmap.width,bitmap.height)??bitmap;const canvas=document.createElement('canvas');canvas.width=dims.width;canvas.height=dims.height;const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.imageSmoothingQuality='high';ctx.drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();return {width:canvas.width,height:canvas.height,data:ctx.getImageData(0,0,canvas.width,canvas.height).data}}
     function canvas(image){const c=document.createElement('canvas');c.width=image.width;c.height=image.height;c.getContext('2d').putImageData(new ImageData(image.data,image.width,image.height),0,0);return c}
     const target=await read(targetBlob);const source=await read(file,(w,h)=>processingSize(w,h,settings));
@@ -63,18 +63,18 @@ try {
     const verification=await run('./.test-artifacts/performance/engine-worker.mjs',{action:'verify',source:compressed,target:encoded.targetImage,original:source});
     row.baselineTotalMs=Math.round(performance.now()-started);row.baselineSSIM=verification.restoredSSIM;
     started=performance.now();await run('./.test-artifacts/performance/engine-worker.mjs',{action:'restore',source:compressed});row.baselineRestoreMs=Math.round(performance.now()-started);
-    started=performance.now();const optimized=await run('./engine-worker.mjs',{action:'encode-file',file,settings,target});row.optimizedTotalMs=Math.round(performance.now()-started);row.optimizedSSIM=optimized.restoredSSIM;row.stages=optimized.timings;
-    started=performance.now();await run('./engine-worker.mjs',{action:'restore-file',file:jpg});row.optimizedRestoreMs=Math.round(performance.now()-started);
+    started=performance.now();const optimized=await run('./src/engine-worker.mjs',{action:'encode-file',file,settings,target});row.optimizedTotalMs=Math.round(performance.now()-started);row.optimizedSSIM=optimized.restoredSSIM;row.stages=optimized.timings;
+    started=performance.now();await run('./src/engine-worker.mjs',{action:'restore-file',file:jpg});row.optimizedRestoreMs=Math.round(performance.now()-started);
     return row;
   }`);
   const rows = [];
   if (!process.argv.includes('--batch-only')) for (let index = 1; index <= 4; index += 1) { const row = await evaluate(`benchmark(${index})`); rows.push(row); console.log(JSON.stringify(row)); }
   const batch = await evaluate(`(async()=>{
-    const {WorkerPool}=await import('./worker-pool.mjs');
-    const {processingSize}=await import('./processing-settings.mjs');
+    const {WorkerPool}=await import('./src/worker-pool.mjs');
+    const {processingSize}=await import('./src/processing-settings.mjs');
     const settings={quality:75,balance:50,tileSize:8,autoResize:true,sourceScale:100,autoCarrier:true,carrierScale:2,manual:false,strength:16,fit:'contain',colorAdapt:true,colorGain:0.75};
-    const bitmap=await createImageBitmap(await(await fetch('./images/static/%E5%A5%B6%E8%9B%99.png')).blob());const canvas=new OffscreenCanvas(bitmap.width,bitmap.height);canvas.getContext('2d').drawImage(bitmap,0,0);bitmap.close();const target={width:canvas.width,height:canvas.height,data:canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data};
-    const large=[];const medium=[];for(let index=1;index<=4;index++){const file=await(await fetch('./test/static/'+index+'.jpg')).blob();const image=await createImageBitmap(file);const size=processingSize(image.width,image.height,settings);large.push({payload:{action:'encode-file',file,target,settings,compactPreview:true},memory:size.width*size.height*(4*24+12)});const ratio=1536/Math.max(image.width,image.height);const small=new OffscreenCanvas(Math.round(image.width*ratio),Math.round(image.height*ratio));small.getContext('2d').drawImage(image,0,0,small.width,small.height);image.close();const resized=await small.convertToBlob();medium.push({payload:{action:'encode-file',file:resized,target,settings:{...settings,autoResize:false},compactPreview:true},memory:small.width*small.height*(4*24+12)});small.width=small.height=1}
+    const bitmap=await createImageBitmap(await(await fetch('./assets/images/static/%E5%A5%B6%E8%9B%99.png')).blob());const canvas=new OffscreenCanvas(bitmap.width,bitmap.height);canvas.getContext('2d').drawImage(bitmap,0,0);bitmap.close();const target={width:canvas.width,height:canvas.height,data:canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data};
+    const large=[];const medium=[];for(let index=1;index<=4;index++){const file=await(await fetch('./tests/fixtures/static/'+index+'.jpg')).blob();const image=await createImageBitmap(file);const size=processingSize(image.width,image.height,settings);large.push({payload:{action:'encode-file',file,target,settings,compactPreview:true},memory:size.width*size.height*(4*24+12)});const ratio=1536/Math.max(image.width,image.height);const small=new OffscreenCanvas(Math.round(image.width*ratio),Math.round(image.height*ratio));small.getContext('2d').drawImage(image,0,0,small.width,small.height);image.close();const resized=await small.convertToBlob();medium.push({payload:{action:'encode-file',file:resized,target,settings:{...settings,autoResize:false},compactPreview:true},memory:small.width*small.height*(4*24+12)});small.width=small.height=1}
     async function measure(jobs){const results={};for(const parallel of [false,true]){const pool=new WorkerPool(parallel?{}:{concurrency:1});let peak=0;const started=performance.now();await Promise.all(jobs.map(job=>pool.run(job.payload,{memory:job.memory,onProgress:()=>{peak=Math.max(peak,pool.slots.filter(slot=>slot.job).length)}})));results[parallel?'parallelMs':'sequentialMs']=Math.round(performance.now()-started);if(parallel){results.maxConcurrency=pool.concurrency;results.peakActive=peak}for(const slot of pool.slots)slot.worker.terminate()}return results}
     return {hardwareConcurrency:navigator.hardwareConcurrency,deviceMemory:navigator.deviceMemory,medium:await measure(medium),large:await measure(large)};
   })()`);

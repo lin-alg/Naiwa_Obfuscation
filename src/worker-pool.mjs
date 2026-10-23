@@ -33,7 +33,7 @@ export class WorkerPool {
       if (active.length >= this.concurrency || (active.length && active.reduce((sum, slot) => sum + slot.job.memory, 0) + job.memory > this.memoryBudget)) return;
       let slot = this.slots.find(item => !item.job);
       if (!slot) {
-        slot = { worker: new Worker('./engine-worker.mjs', { type: 'module' }), job: null };
+        slot = { worker: new Worker(new URL('./engine-worker.mjs', import.meta.url), { type: 'module' }), job: null };
         this.slots.push(slot);
         slot.worker.onmessage = ({ data }) => {
           if (!slot.job || data.id !== slot.job.id) return;

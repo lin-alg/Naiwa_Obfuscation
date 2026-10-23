@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { artifactDirectory, artifactEnvironment } from './artifact-paths.mjs';
 import { fileURLToPath } from 'node:url';
-import { FORMAT_VERSION, encodeImage, fitImage, flattenImage, imageSimilarity, presetSimilarity, restoreImage } from '../core.mjs';
+import { FORMAT_VERSION, encodeImage, fitImage, flattenImage, imageSimilarity, presetSimilarity, restoreImage } from '../src/core.mjs';
 import { decode, jpeg } from './image-io.mjs';
 
 const args = process.argv.slice(2);
@@ -36,10 +36,10 @@ if (args.includes('--background')) {
   console.log(`Started batch PID ${child.pid}; report=${reportName}`);
   process.exit(0);
 }
-const manifest = JSON.parse(await readFile(new URL('../test/manifest.json', import.meta.url), 'utf8'));
+const manifest = JSON.parse(await readFile(new URL('./fixtures/manifest.json', import.meta.url), 'utf8'));
 const entries = manifest.slice().sort((a, b) => a.width * a.height - b.width * b.height).slice(0, count);
 const presetNames = ['奶蛙', 'naishu', 'naigou', 'naidan'];
-const presets = await Promise.all(presetIds.map(async (id) => ({ id, image: await decode(fileURLToPath(new URL(`../images/static/${presetNames[id]}.png`, import.meta.url)), 512, 512) })));
+const presets = await Promise.all(presetIds.map(async (id) => ({ id, image: await decode(fileURLToPath(new URL(`../assets/images/static/${presetNames[id]}.png`, import.meta.url)), 512, 512) })));
 const profiles = option('profiles', '');
 const configs = profiles ? profiles.split(',').map((profile) => {
   const [scale, step, gain] = profile.split(':').map(Number);
@@ -54,7 +54,7 @@ const mean = (values) => values.reduce((sum, value) => sum + value, 0) / values.
 console.log(`Batch: ${configs.length} configurations × ${entries.length} images × ${presets.length} presets × ${qualities.length} JPEG levels; threshold=${threshold}; maxSide=${maxSide || 'native'}`);
 for (let imageIndex = 0; imageIndex < entries.length; imageIndex += 1) {
   const entry = entries[imageIndex];
-  const path = fileURLToPath(new URL(`../test/static/${encodeURIComponent(entry.name)}`, import.meta.url));
+  const path = fileURLToPath(new URL(`./fixtures/static/${encodeURIComponent(entry.name)}`, import.meta.url));
   const factor = maxSide ? Math.min(1, maxSide / Math.max(entry.width, entry.height)) : 1;
   const width = Math.max(1, Math.round(entry.width * factor));
   const height = Math.max(1, Math.round(entry.height * factor));

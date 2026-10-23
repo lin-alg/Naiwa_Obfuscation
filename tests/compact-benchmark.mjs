@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { open, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { encodeImage, restoreImage, imageSimilarity } from '../core.mjs';
+import { encodeImage, restoreImage, imageSimilarity } from '../src/core.mjs';
 import { decode, jpeg, png } from './image-io.mjs';
 import { artifactDirectory, artifactEnvironment } from './artifact-paths.mjs';
 
@@ -27,10 +27,10 @@ const results = [];
 for (const [filename, width, height] of photos) {
   const factor = Math.min(1, 1024 / Math.max(width, height));
   const sampleWidth = Math.round(width * factor); const sampleHeight = Math.round(height * factor);
-  const source = await decode(fileURLToPath(new URL(`../test/static/${filename}`, import.meta.url)), sampleWidth, sampleHeight,
+  const source = await decode(fileURLToPath(new URL(`./fixtures/static/${filename}`, import.meta.url)), sampleWidth, sampleHeight,
     factor < 1 ? `scale=${sampleWidth}:${sampleHeight}:flags=area` : undefined);
   for (const presetName of presets) {
-    const preset = await decode(fileURLToPath(new URL(`../images/static/${presetName}`, import.meta.url)), 512, 512);
+    const preset = await decode(fileURLToPath(new URL(`../assets/images/static/${presetName}`, import.meta.url)), 512, 512);
     for (const [tileSize, scale] of [[8, 2], [8, 1.5], [16, 1.5]]) {
       const encoded = await encodeImage(source, preset, { tileSize, scale, step: 16 });
       const image = { width: encoded.plan.outputWidth, height: encoded.plan.outputHeight, data: encoded.data };

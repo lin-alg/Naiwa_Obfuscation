@@ -2,7 +2,7 @@
 import { writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
-import { zipFiles } from '../zip-store.mjs';
+import { zipFiles } from '../src/zip-store.mjs';
 import { artifactDirectory } from './artifact-paths.mjs';
 
 const directory = await artifactDirectory('zip');

@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { alignedFrameDelays, decodeIndices, embeddedImagePayload, encodeIndices, gifFrameBlock, gifFrames, gifHeader, gifPayload, gifPayloadBlock, parseGif, concatBytes } from '../gif-codec.mjs';
+import { alignedFrameDelays, decodeIndices, embeddedImagePayload, encodeIndices, gifFrameBlock, gifFrames, gifHeader, gifPayload, gifPayloadBlock, parseGif, concatBytes } from '../src/gif-codec.mjs';
 
-const samples = ['images/animated/1.gif', 'images/animated/2.gif', 'test/animated/1.gif', 'test/animated/2.gif', 'test/animated/3.gif'];
+const asset = (name) => fileURLToPath(new URL(`../assets/images/animated/${name}`, import.meta.url));
+const fixture = (name) => fileURLToPath(new URL(`./fixtures/animated/${name}`, import.meta.url));
+const samples = [asset('1.gif'), asset('2.gif'), fixture('1.gif'), fixture('2.gif'), fixture('3.gif')];
 let frameTotal = 0;
 for (const path of samples) {
   const bytes = new Uint8Array(await readFile(path)); const gif = parseGif(bytes); let count = 0;
@@ -38,9 +41,9 @@ assert.equal(stillPayload.mime, 'image/png'); assert.equal(stillPayload.raw, tru
 assert.ok(stillPayload.compressed.every((byte, index) => byte === stillBytes[index]), 'embedded static image bytes are lossless');
 
 for (const [sourcePath, targetPath] of [
-  ['test/animated/1.gif', 'images/animated/2.gif'],
-  ['test/animated/2.gif', 'images/animated/1.gif'],
-  ['test/animated/3.gif', 'images/animated/1.gif'],
+  [fixture('1.gif'), asset('2.gif')],
+  [fixture('2.gif'), asset('1.gif')],
+  [fixture('3.gif'), asset('1.gif')],
 ]) {
   const source = parseGif(await readFile(sourcePath)); const target = parseGif(await readFile(targetPath));
   const delays = alignedFrameDelays(source, target);

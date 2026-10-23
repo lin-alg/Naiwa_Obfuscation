@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { artifactDirectory } from './artifact-paths.mjs';
 import { decode, jpeg } from './image-io.mjs';
-import * as current from '../core.mjs';
+import * as current from '../src/core.mjs';
 
 const directory = await artifactDirectory('performance');
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -16,13 +16,13 @@ for (const name of ['core.mjs', 'reed-solomon.mjs']) {
 }
 const baseline = await import(pathToFileURL(join(directory, 'core.mjs')));
 const maxSide = Number(process.argv.find(arg => arg.startsWith('--max-side='))?.slice(11) ?? 1024);
-const manifest = JSON.parse(await readFile(new URL('../test/manifest.json', import.meta.url)));
-const preset = await decode(fileURLToPath(new URL('../images/static/奶蛙.png', import.meta.url)), 512, 512);
+const manifest = JSON.parse(await readFile(new URL('./fixtures/manifest.json', import.meta.url)));
+const preset = await decode(fileURLToPath(new URL('../assets/images/static/奶蛙.png', import.meta.url)), 512, 512);
 const rows = [];
 for (const entry of manifest) {
   const ratio = Math.min(1, maxSide / Math.max(entry.width, entry.height));
   const width = Math.round(entry.width * ratio); const height = Math.round(entry.height * ratio);
-  const source = await decode(join(root, 'test/static', entry.name), width, height, `scale=${width}:${height}:flags=area`);
+  const source = await decode(join(root, 'tests/fixtures/static', entry.name), width, height, `scale=${width}:${height}:flags=area`);
   const row = { image: entry.name, size: `${width}x${height}`, stages: {} };
   let oldEncoded;
   for (const [name, implementation] of [['baseline', baseline], ['optimized', current]]) {

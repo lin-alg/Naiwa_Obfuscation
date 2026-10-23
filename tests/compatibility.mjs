@@ -4,7 +4,7 @@ import { writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { encodeImage, restoreImage, imageSimilarity } from '../core.mjs';
+import { encodeImage, restoreImage, imageSimilarity } from '../src/core.mjs';
 import { artifactDirectory } from './artifact-paths.mjs';
 
 const directory = await artifactDirectory('compatibility');

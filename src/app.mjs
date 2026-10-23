@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { createPlan } from './core.mjs';
-import { carrierScale, processingSize, processingOptions } from './processing-settings.mjs';
+import { carrierScale, conversionDefaults, processingSize, processingOptions } from './processing-settings.mjs';
 import { listPresets, savePreset, deletePreset, selectedPreset } from './preset-store.mjs';
 import { WorkerPool } from './worker-pool.mjs';
 import { initializePreviews } from './preview-controller.mjs';
@@ -9,14 +9,14 @@ import { isGif } from './gif-codec.mjs';
 
 const $ = selector => document.querySelector(selector);
 const PRESETS = [
-  { name: '奶蛙', src: './images/static/%E5%A5%B6%E8%9B%99.png' },
-  { name: '鼠蛙', src: './images/static/naishu.png' },
-  { name: '蛙狗', src: './images/static/naigou.png' },
-  { name: '蛙蛋', src: './images/static/naidan.png' },
-  { name: '奶蛙 GIF', src: './images/animated/1.gif', animated: true },
-  { name: '鼠蛙 GIF', src: './images/animated/2.gif', animated: true },
+  { name: '奶蛙', src: './assets/images/static/%E5%A5%B6%E8%9B%99.png' },
+  { name: '鼠蛙', src: './assets/images/static/naishu.png' },
+  { name: '蛙狗', src: './assets/images/static/naigou.png' },
+  { name: '蛙蛋', src: './assets/images/static/naidan.png' },
+  { name: '奶蛙 GIF', src: './assets/images/animated/1.gif', animated: true },
+  { name: '鼠蛙 GIF', src: './assets/images/animated/2.gif', animated: true },
 ];
-const state = { encode: [], decode: [], activeEncode: null, activeDecode: null, presetIndex: 0, presetImages: [], presetGifBytes: [], presetsReady: false, encodePaint: 0, decodePaint: 0 };
+const state = { encode: [], decode: [], activeEncode: null, activeDecode: null, presetIndex: 0, presetImages: [], presetGifBytes: [], presetsReady: false, settingsTouched: new Set(), encodePaint: 0, decodePaint: 0 };
 const pool = new WorkerPool();
 const previews = initializePreviews();
 const activeEntry = kind => state[kind].find(entry => entry.id === state[kind === 'encode' ? 'activeEncode' : 'activeDecode']);
@@ -52,6 +52,24 @@ function writeSettings(settings) {
   const index = PRESETS.findIndex(preset => presetKey(preset) === settings.preset);
   setPreset(index < 0 ? 0 : index, false);
   syncSettings();
+}
+
+function settingsForConversion(settings, sourceIsGif, preset = settings.preset) {
+  const animatedOutput = sourceIsGif || animatedPreset(preset);
+  const defaults = conversionDefaults(settings, animatedOutput);
+  return {
+    ...settings,
+    balance: state.settingsTouched.has('balance') ? settings.balance : defaults.balance,
+    tileSize: state.settingsTouched.has('tileSize') ? settings.tileSize : defaults.tileSize,
+  };
+}
+
+function applyConversionDefaults(sourceIsGif = activeEntry('encode')?.isGif ?? false) {
+  const settings = settingsForConversion(readSettings(), sourceIsGif);
+  $('#balance').value = String(settings.balance);
+  $('#tile-size').value = String(settings.tileSize);
+  syncSettings();
+  return settings;
 }
 
 function showToast(message, isError = false, action) {
@@ -126,6 +144,7 @@ function syncDesktopLayout() {
 
 function syncSettings() {
   const settings = readSettings(); const scale = carrierScale(settings);
+  document.body.classList.toggle('has-advanced-settings', $('#advanced-settings').open);
   const gifActive = Boolean(activeEntry('encode')?.isGif || animatedPreset(settings.preset));
   $('#jpg-quality').disabled = gifActive;
   $('#jpg-quality-hint').textContent = gifActive ? 'GIF 保留动画，此设置只影响静态图片。' : '生成后还可继续调节，文件大小会实时更新。';
@@ -136,7 +155,7 @@ function syncSettings() {
   $('#tile-size-hint').textContent = gifActive ? '调小后，GIF 画面里的预设图案会更清楚。' : '调小后，混淆图里的预设图案会更清楚；文件也会更大。';
   $('#carrier-scale-hint').textContent = gifActive ? 'GIF 会保留动画，不使用放大载体。' : settings.autoCarrier ? `当前自动放大 ${scale} 倍。倍数越高，混淆图文件越大。` : '可选 1–8 倍。倍数越高，混淆图文件越大；太低可能无法还原。';
   $('#jpg-quality-value').value = `${settings.quality}%`; $('#strength-value').value = String(settings.strength);
-  $('#balance-value').value = settings.balance < 34 ? '还原图更清晰' : settings.balance > 66 ? '混淆图更像预设' : '两边兼顾';
+  $('#balance-value').value = settings.balance < 42 ? '还原图更清晰' : settings.balance > 58 ? '混淆图更像预设' : '两边兼顾';
   $('#manual-fields').disabled = !settings.manual; $('#balance').disabled = settings.manual;
   $('#advanced-mode-label').textContent = gifActive ? 'GIF 动画设置' : settings.manual ? '自定义效果' : '尺寸与效果微调';
   $('#balance-hint').textContent = gifActive ? '往右调，GIF 画面会更接近所选预设。' : settings.manual ? '当前使用下方的自定义选项调整效果。' : '往左调，还原图会保留更多原图细节；往右调，混淆图会更接近所选预设。';
@@ -311,12 +330,17 @@ async function importFiles(files, kind) {
   const images = [...files].filter(file => file.type.startsWith('image/'));
   if (!images.length) throw new Error('请选择有效的图像文件。');
   const settings = readSettings();
-  const entries = images.map(file => ({ id: crypto.randomUUID(), file, settings: { ...settings }, version: 0, status: 'loading', label: '读取图像…', progress: 0, result: null, started: false }));
+  const typedImages = await Promise.all(images.map(async file => ({ file, isGif: isGif(new Uint8Array(await file.slice(0, 6).arrayBuffer())) })));
+  const unifiedMode = $('#unify-settings').checked ? typedImages.some(({ isGif: animatedSource }) => animatedSource) : null;
+  const entries = typedImages.map(({ file, isGif: animatedSource }) => ({
+    id: crypto.randomUUID(), file, isGif: animatedSource,
+    settings: settingsForConversion(settings, unifiedMode ?? animatedSource),
+    version: 0, status: 'loading', label: '读取图像…', progress: 0, result: null, started: false,
+  }));
   for (const entry of entries) { state[kind].push(entry); createRow(entry, kind); }
   selectEntry(entries[0], kind);
   for (const entry of entries) {
     try {
-      entry.isGif = isGif(new Uint8Array(await entry.file.slice(0, 6).arrayBuffer()));
       const bitmap = await createImageBitmap(entry.file);
       if (!state[kind].includes(entry)) { bitmap.close(); continue; }
       entry.width = bitmap.width; entry.height = bitmap.height;
@@ -443,7 +467,12 @@ function setPreset(index, notify = true) {
   const image = state.presetImages[index];
   $('#custom-preset-hint').textContent = preset.filename ? `${preset.saved ? '已保存在这台设备' : '仅本次可用'} · ${image.width} × ${image.height}` : '新加的预设会保存在这台设备上。';
   $('#selected-preset-name').textContent = preset.name;
-  if (notify && changed) settingsChanged();
+  if (notify && changed) {
+    const settings = applyConversionDefaults();
+    const entry = activeEntry('encode');
+    if (entry) entry.settings = { ...entry.settings, balance: settings.balance, tileSize: settings.tileSize };
+    settingsChanged();
+  }
 }
 
 function renderPresets(index = state.presetIndex) {
@@ -484,6 +513,9 @@ async function initializePresets() {
     }
   } catch { showToast('浏览器本地存储暂不可用，自定义预设仍可在本次使用。'); }
   const index = PRESETS.findIndex(preset => presetKey(preset) === lastSelected); renderPresets(index < 0 ? 0 : index);
+  const defaults = applyConversionDefaults(false);
+  const initialEntry = activeEntry('encode');
+  if (initialEntry) initialEntry.settings = { ...initialEntry.settings, balance: defaults.balance, tileSize: defaults.tileSize };
   state.presetsReady = true; syncBatch('encode');
   $('#custom-preset-picker').disabled = false;
   for (const entry of state.encode) if (!entry.started) entry.settings.preset = presetKey(PRESETS[state.presetIndex]);
@@ -543,7 +575,10 @@ $('#encode-button').addEventListener('click', () => processBatch('encode'));
 $('#decode-button').addEventListener('click', () => processBatch('decode'));
 $('#unify-settings').addEventListener('change', () => { if ($('#unify-settings').checked) settingsChanged(); else syncSettings(); });
 for (const [key, [id, type]] of Object.entries(fields)) {
-  $(`#${id}`).addEventListener(type === 'checkbox' || id === 'source-scale' ? 'change' : 'input', () => settingsChanged({ qualityOnly: key === 'quality' }));
+  $(`#${id}`).addEventListener(type === 'checkbox' || id === 'source-scale' ? 'change' : 'input', () => {
+    if (key === 'balance' || key === 'tileSize') state.settingsTouched.add(key);
+    settingsChanged({ qualityOnly: key === 'quality' });
+  });
 }
 $('#advanced-settings').addEventListener('toggle', () => { syncSettings(); requestAnimationFrame(() => previews.apply()); });
 $('#download-button').addEventListener('click', () => { const entry = activeEntry('encode'); if (isReady(entry)) downloadBlob(entry.result.jpg, filename(entry, 'encode')); });

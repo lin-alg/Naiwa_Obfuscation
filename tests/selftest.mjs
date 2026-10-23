@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from 'node:assert/strict';
-import { createPlan, encodeImage, fitImage, flattenImage, imageSimilarity, restoreImage } from '../core.mjs';
-import { encodeRS, decodeRS } from '../reed-solomon.mjs';
-import { sourceSizing } from '../image-sizing.mjs';
+import { createPlan, encodeImage, fitImage, flattenImage, imageSimilarity, restoreImage } from '../src/core.mjs';
+import { encodeRS, decodeRS } from '../src/reed-solomon.mjs';
+import { sourceSizing } from '../src/image-sizing.mjs';
+import { balancePreference, conversionDefaults, processingOptions } from '../src/processing-settings.mjs';
 
 const message = Uint8Array.from({ length: 159 }, (_, i) => (i * 37 + 19) % 256);
 const corrupted = encodeRS(message);
@@ -25,6 +26,14 @@ function image(width, height, transparent = false) {
 
 assert.equal(createPlan(1920, 1200).tileSize, 8);
 assert.equal(createPlan(1920, 1200).tileCount, 36000);
+assert.equal(balancePreference(0), 0, 'left slider endpoint preserves the original setting');
+assert.equal(balancePreference(50), 0.75, 'slider midpoint is calibrated to the previous balanced position');
+assert.equal(balancePreference(100), 1, 'right slider endpoint preserves the original setting');
+assert.deepEqual(conversionDefaults({}, false), { balance: 50, tileSize: 8 });
+assert.deepEqual(conversionDefaults({}, true), { balance: 100, tileSize: 2 });
+assert.deepEqual(processingOptions({ balance: 50, tileSize: 8, quality: 75, autoCarrier: true, manual: false }), {
+  tileSize: 8, scale: 2, step: 18, fit: 'contain', colorAdapt: true, colorGain: 0.5,
+});
 assert.equal(createPlan(192, 128, { tileSize: 32 }).tileSize, 32, 'previous v6 outputs with 32px tiles remain readable');
 for (let tileSize = 2; tileSize <= 16; tileSize += 1) {
   const scale = Math.max(1, Math.min(8, Math.round((16 / tileSize) * 2) / 2));

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { writeFile } from 'node:fs/promises';
-import { FORMAT_VERSION, encodeImage, fitImage, flattenImage, imageSimilarity, presetSimilarity, restoreImage } from '../core.mjs';
+import { FORMAT_VERSION, encodeImage, fitImage, flattenImage, imageSimilarity, presetSimilarity, restoreImage } from '../src/core.mjs';
 import { decode, jpeg } from './image-io.mjs';
 
 function makeImage(width, height, transparent) {
