@@ -20,6 +20,11 @@ for (const path of samples) {
   assert.equal(count, gif.frames.length); frameTotal += count;
 }
 
+const palette4 = new Uint8Array(12);
+const completeWithoutEndCode = { width: 1, height: 1, palette: palette4, minimum: 2, compressed: Uint8Array.of(0x04) };
+assert.deepEqual([...decodeIndices(completeWithoutEndCode)], [0], 'a complete pixel may be followed by a missing LZW end code');
+assert.throws(() => decodeIndices({ ...completeWithoutEndCode, width: 2 }), /像素数据不完整/, 'missing pixel indices must still be rejected');
+
 const original = new Uint8Array(await readFile(samples[2])); const compressed = gzipSync(original);
 const palette = new Uint8Array(256 * 3);
 const container = concatBytes([

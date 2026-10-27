@@ -77,14 +77,14 @@ export function decodeIndices(frame) {
   const { minimum, compressed } = frame; const clear = 1 << minimum; const end = clear + 1;
   const prefix = new Uint16Array(4096); const suffix = new Uint8Array(4096); const stack = new Uint8Array(4097);
   const output = new Uint8Array(frame.width * frame.height);
-  let bits = minimum + 1; let next = end + 1; let previous = -1; let first = 0; let bit = 0; let written = 0; let ended = false;
+  let bits = minimum + 1; let next = end + 1; let previous = -1; let first = 0; let bit = 0; let written = 0;
   for (let i = 0; i < clear; i += 1) suffix[i] = i;
   while (bit + bits <= compressed.length * 8) {
     let code = 0;
     for (let b = 0; b < bits; b += 1) code |= ((compressed[(bit + b) >> 3] >> ((bit + b) & 7)) & 1) << b;
     bit += bits;
     if (code === clear) { bits = minimum + 1; next = end + 1; previous = -1; continue; }
-    if (code === end) { ended = true; break; }
+    if (code === end) break;
     if (code > next || (code === next && previous < 0)) throw new Error(`GIF LZW 索引损坏（码字 ${code}，字典 ${next}，位数 ${bits}，偏移 ${bit}）。`);
     const original = code; let count = 0;
     if (code === next) { stack[count++] = first; code = previous; }
@@ -101,7 +101,7 @@ export function decodeIndices(frame) {
     }
     previous = original;
   }
-  if (!ended || written !== output.length) throw new Error('GIF 帧像素数据不完整。');
+  if (written !== output.length) throw new Error('GIF 帧像素数据不完整。');
   for (const value of output) if (value >= frame.palette.length / 3) throw new Error('GIF 调色板索引无效。');
   return output;
 }
