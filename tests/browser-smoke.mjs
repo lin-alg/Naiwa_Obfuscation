@@ -216,6 +216,16 @@ applicationChecks: try {
   await waitFor(`document.querySelectorAll('.preset-option').length===6&&!document.querySelector('#custom-preset-picker').disabled`);
   finishedDownloads.length = 0;
   if (!await evaluate(`document.querySelector('.tutorial').hidden`)) throw new Error('Completed tutorials returned after reload');
+  await evaluate(`document.querySelector('[data-view="join"]').click()`);
+  const joinView = await evaluate(`(() => {const view=document.querySelector('#join-view'),link=view.querySelector('.community-cta');return {active:document.querySelector('[data-view="join"]').classList.contains('is-active'),visible:!view.hidden&&view.classList.contains('is-visible'),href:link.href,target:link.target,rel:link.rel}})()`);
+  if (!joinView.active || !joinView.visible || joinView.href !== 'https://qm.qq.com/q/9rp9vGSJS8' || joinView.target !== '_blank' || !joinView.rel.includes('noopener')) throw new Error(`Join page navigation or QQ group link is incorrect: ${JSON.stringify(joinView)}`);
+  for (const width of [320, 390, 768, 1440]) {
+    await command('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: width < 500 });
+    const joinLayout = await evaluate(`(() => {const panel=document.querySelector('.community-panel').getBoundingClientRect();return {document:document.documentElement.scrollWidth,panelRight:panel.right}})()`);
+    if (joinLayout.document > width || joinLayout.panelRight > width) throw new Error(`Join page overflows at ${width}px: ${JSON.stringify(joinLayout)}`);
+  }
+  await command('Emulation.clearDeviceMetricsOverride');
+  await evaluate(`document.querySelector('[data-view="encode"]').click()`);
   console.log('tutorial passed: only key upload and single-item actions are gated; explanation steps continue freely; section records, skip and replay passed');
   if (process.argv.includes('--tutorial-only')) break applicationChecks;
   for (const selector of ['#source-list .batch-remove', '#decode-list .batch-remove']) await evaluate(`document.querySelectorAll('${selector}').forEach(button=>button.click())`);
