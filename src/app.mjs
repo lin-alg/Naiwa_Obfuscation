@@ -7,6 +7,7 @@ import { initializePreviews } from './preview-controller.mjs';
 import { zipFiles } from './zip-store.mjs';
 import { isGif } from './gif-codec.mjs';
 import { initializeTutorial } from './guided-tour.mjs';
+import { initializeAnalytics } from './analytics.mjs';
 
 const $ = selector => document.querySelector(selector);
 const PRESETS = [
@@ -199,7 +200,15 @@ function createRow(entry, kind) {
   ring.addEventListener('click', () => processSingle(entry, kind));
   select.append(image, text); select.addEventListener('click', () => selectEntry(entry, kind));
   const actions = document.createElement('span'); actions.className = 'batch-item-actions';
-  const download = document.createElement('button'); download.type = 'button'; download.className = 'batch-download'; download.textContent = '↓'; download.title = '下载此条目';
+  const download = document.createElement('button'); download.type = 'button'; download.className = 'batch-download'; download.title = '下载此条目';
+  const downloadIcon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  downloadIcon.setAttribute('viewBox', '0 0 24 24'); downloadIcon.setAttribute('fill', 'none'); downloadIcon.setAttribute('stroke', 'currentColor');
+  downloadIcon.setAttribute('stroke-width', '2'); downloadIcon.setAttribute('stroke-linecap', 'round'); downloadIcon.setAttribute('stroke-linejoin', 'round');
+  downloadIcon.setAttribute('aria-hidden', 'true'); downloadIcon.setAttribute('focusable', 'false');
+  const downloadArrow = document.createElementNS('http://www.w3.org/2000/svg', 'path'); downloadArrow.setAttribute('d', 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4');
+  const downloadStem = document.createElementNS('http://www.w3.org/2000/svg', 'path'); downloadStem.setAttribute('d', 'm7 10 5 5 5-5');
+  const downloadShaft = document.createElementNS('http://www.w3.org/2000/svg', 'path'); downloadShaft.setAttribute('d', 'M12 15V3');
+  downloadIcon.append(downloadArrow, downloadStem, downloadShaft); download.append(downloadIcon);
   download.setAttribute('aria-label', `下载 ${entry.file.name}`); download.addEventListener('click', () => { if (isReady(entry)) downloadBlob(kind === 'encode' ? entry.result.jpg : entry.result.blob, filename(entry, kind)); });
   const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'batch-remove'; remove.textContent = '×'; remove.title = `移除 ${entry.file.name}`;
   remove.setAttribute('aria-label', remove.title); remove.addEventListener('click', () => removeEntry(entry, kind));
@@ -432,6 +441,7 @@ async function processEntry(entry, kind) {
       entry.size = { width: result.sourceWidth, height: result.sourceHeight, scale: Math.min(result.sourceWidth / entry.width, result.sourceHeight / entry.height), automatic: true };
     }
     entry.result = result; entry.cached = null; entry.completedAt = Date.now(); entry.status = result.warning ? 'warning' : 'done'; entry.progress = 1;
+    analytics.recordConversion();
     // Keep recent carriers for instant quality edits, with a fixed byte budget
     // so a long batch does not retain every enlarged, uncompressed image.
     let retained = 0;
@@ -648,6 +658,7 @@ document.querySelectorAll('.tab').forEach(button => button.addEventListener('cli
 initializePresets().catch(error => showToast(error.message, true));
 syncSettings(); syncBatch('encode'); syncBatch('decode');
 initializeTutorial();
+const analytics = initializeAnalytics();
 
 $('.workbench').addEventListener('wheel', event => {
   if (matchMedia('(max-width: 640px)').matches || event.ctrlKey || !event.deltaY) return;

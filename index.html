@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#fff7c2">
-    <title>奶蛙混淆图生成器 · Naiwa</title>
+    <title>奶蛙混淆图生成器 · 奶-hub</title>
     <link rel="icon" type="image/svg+xml" href="./assets/naiwa.svg">
     <link rel="stylesheet" href="./styles.css">
   </head>
@@ -16,7 +16,11 @@
       </a>
       <div class="topbar-actions">
         <button class="tutorial-button" id="tutorial-button" type="button"><span aria-hidden="true">?</span>使用教程</button>
-        <div class="local-badge"><span class="status-dot"></span> 本地处理</div>
+        <div class="local-badge"><span class="status-dot"></span> 本地处理所有文件</div>
+        <div class="site-stats" aria-label="网站统计" aria-live="polite">
+          <span>总访客数 <strong id="visitor-count">—</strong></span>
+          <span>总转图次数 <strong id="conversion-count">—</strong></span>
+        </div>
       </div>
     </header>
 
@@ -30,7 +34,7 @@
         <div class="workspace-heading">
           <div>
             <h1 id="encode-title">生成奶蛙混淆图</h1>
-            <p class="workspace-intro">选一张原图和参考图，生成可还原的混淆图。</p>
+            <p class="workspace-intro">将一切表情变为奶蛙！</p>
           </div>
           <span class="file-meta" id="source-meta">尚未选择图像</span>
         </div>
@@ -213,7 +217,35 @@
     </main>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <footer class="site-footer"><span>Naiwa · GPL-3.0-or-later</span><span>所有图片仅在本地浏览器处理，不会上传到任何地方。网站仅作娱乐用途，请在法律允许的范围内合理使用本网站。</span></footer>
+    <footer class="site-footer">
+      <a href="#terms" data-policy="terms">使用条款</a>
+      <a href="#privacy" data-policy="privacy">隐私政策</a>
+      <a href="https://github.com/lin-alg/Naiwa_Obfuscation" target="_blank" rel="noopener noreferrer">项目Github仓库</a>
+      <a href="https://nai-hub.com" target="_blank" rel="noopener noreferrer">访问奶-hub</a>
+    </footer>
+
+    <dialog class="policy-dialog" id="policy-dialog" aria-labelledby="policy-title">
+      <div class="policy-heading">
+        <h2 id="policy-title">使用条款</h2>
+        <button class="policy-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <article class="policy-copy" id="terms-copy">
+        <p>请仅在法律允许的范围内使用本工具，并尊重他人的著作权、肖像权、隐私权及其他合法权益。不得将本工具用于违法违规、侵害他人权益或规避平台规则的用途。</p>
+        <p>你应确保对所选图片及参考图拥有必要的使用权限，并自行判断生成内容的适用范围。处理结果可能受图片质量、压缩或平台转换影响，本工具不保证每次都能成功还原。</p>
+        <p>图片处理全部在你的浏览器中完成。使用本网站即表示你已阅读并同意以上条款。</p>
+      </article>
+      <article class="policy-copy" id="privacy-copy" hidden>
+        <p><strong>图片处理：</strong>你选择的原图和生成结果只在当前浏览器中处理，不会上传到任何地方。你添加的自定义参考图会保存在本机浏览器的存储中；你可以手动删除这些参考图，或者直接以清空网站数据的方式来移除。</p>
+        <p><strong>访客统计：</strong>统计默认开启。页面向 <code>bsz.iirose.cn</code> 统计接口发送访客请求，并在每次成功图片处理（混淆或还原）后记录一次转图。本站使用第一方 Cookie 保存访客标识（最长一年），供统计服务去重。请求会包含页面地址及网络连接信息（例如 IP 地址和浏览器 User-Agent）；不会发送图片内容。此服务是第三方不蒜子兼容实现，并非原版官方服务。<a href="https://busuanzi.9420.ltd/usage.html" target="_blank" rel="noopener noreferrer">查看兼容服务说明</a>（服务方说明不提供 SLA）。</p>
+        <p>你可以使用下方开关关闭统计；关闭后停止发送新请求并删除本站保存的访客 Cookie，不影响服务方此前收到的数据。</p>
+        <label class="policy-analytics-toggle" for="analytics-toggle">
+          <span>访客与转图次数统计</span>
+          <input id="analytics-toggle" type="checkbox" role="switch" aria-label="启用访客与转图统计" aria-checked="true" checked>
+          <span id="analytics-toggle-state">已开启</span>
+        </label>
+      </article>
+      <button class="primary-button policy-done" type="button">完成</button>
+    </dialog>
     <script type="module" src="./src/app.mjs"></script>
   </body>
 </html>
