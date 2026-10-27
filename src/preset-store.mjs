@@ -23,7 +23,7 @@ async function transact(mode, action) {
     let result;
     request.onsuccess = () => { result = request.result; };
     transaction.oncomplete = () => resolve(result);
-    transaction.onabort = transaction.onerror = () => reject(transaction.error ?? new Error('无法访问浏览器预设存储。'));
+    transaction.onabort = transaction.onerror = () => reject(transaction.error ?? new Error('无法访问浏览器参考图存储。'));
   });
 }
 

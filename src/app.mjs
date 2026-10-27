@@ -6,6 +6,7 @@ import { WorkerPool } from './worker-pool.mjs';
 import { initializePreviews } from './preview-controller.mjs';
 import { zipFiles } from './zip-store.mjs';
 import { isGif } from './gif-codec.mjs';
+import { initializeTutorial } from './guided-tour.mjs';
 
 const $ = selector => document.querySelector(selector);
 const PRESETS = [
@@ -54,13 +55,13 @@ function writeSettings(settings) {
   syncSettings();
 }
 
-function settingsForConversion(settings, sourceIsGif, preset = settings.preset) {
+function settingsForConversion(settings, sourceIsGif, preset = settings.preset, touched = activeEntry('encode')?.settingsTouched ?? state.settingsTouched) {
   const animatedOutput = sourceIsGif || animatedPreset(preset);
   const defaults = conversionDefaults(settings, animatedOutput);
   return {
     ...settings,
-    balance: state.settingsTouched.has('balance') ? settings.balance : defaults.balance,
-    tileSize: state.settingsTouched.has('tileSize') ? settings.tileSize : defaults.tileSize,
+    balance: touched.has('balance') ? settings.balance : defaults.balance,
+    tileSize: touched.has('tileSize') ? settings.tileSize : defaults.tileSize,
   };
 }
 
@@ -152,16 +153,16 @@ function syncSettings() {
   $('#carrier-scale').disabled = gifActive || settings.autoCarrier; $('#auto-carrier').disabled = gifActive;
   $('#source-scale').disabled = gifActive || settings.autoResize; $('#auto-resize').disabled = gifActive;
   $('#tile-size-value').value = `${settings.tileSize} px`;
-  $('#tile-size-hint').textContent = gifActive ? '调小后，GIF 画面里的预设图案会更清楚。' : '调小后，混淆图里的预设图案会更清楚；文件也会更大。';
+  $('#tile-size-hint').textContent = gifActive ? '调小后，GIF 画面里的参考图案会更清楚。' : '调小后，混淆图里的参考图案会更清楚；文件也会更大。';
   $('#carrier-scale-hint').textContent = gifActive ? 'GIF 会保留动画，不使用放大载体。' : settings.autoCarrier ? `当前自动放大 ${scale} 倍。倍数越高，混淆图文件越大。` : '可选 1–8 倍。倍数越高，混淆图文件越大；太低可能无法还原。';
   $('#jpg-quality-value').value = `${settings.quality}%`; $('#strength-value').value = String(settings.strength);
-  $('#balance-value').value = settings.balance < 42 ? '还原图更清晰' : settings.balance > 58 ? '混淆图更像预设' : '两边兼顾';
+  $('#balance-value').value = settings.balance < 42 ? '还原图更清晰' : settings.balance > 58 ? '混淆图更像参考图' : '两边兼顾';
   $('#manual-fields').disabled = !settings.manual; $('#balance').disabled = settings.manual;
   $('#advanced-mode-label').textContent = gifActive ? 'GIF 动画设置' : settings.manual ? '自定义效果' : '尺寸与效果微调';
-  $('#balance-hint').textContent = gifActive ? '往右调，GIF 画面会更接近所选预设。' : settings.manual ? '当前使用下方的自定义选项调整效果。' : '往左调，还原图会保留更多原图细节；往右调，混淆图会更接近所选预设。';
+  $('#balance-hint').textContent = gifActive ? '往右调，GIF 画面会更接近所选参考图。' : settings.manual ? '当前使用下方的自定义选项调整效果。' : '往左调，还原图会保留更多原图细节；往右调，混淆图会更接近所选参考图。';
   $('.advanced-preview').hidden = !$('#advanced-settings').open;
   $('#preview-grid').classList.toggle('has-target', $('#advanced-settings').open);
-  $('#batch-settings-hint').textContent = $('#unify-settings').checked ? '调整一张图片时，其他图片也会使用相同设置。' : '只调整当前选中的图片。';
+  $('#batch-settings-hint').textContent = $('#unify-preset').checked ? '只同步参考图，处理参数各自独立。' : '参考图与处理参数均独立。';
 }
 
 function syncSourceMeta(entry) {
@@ -181,7 +182,7 @@ function syncSourceMeta(entry) {
     // The automatic readout is separate from the stored manual scale.
     $('#source-size-hint').textContent = animatedOutput
       ? entry.isGif ? `上传 ${entry.width} × ${entry.height} → GIF 帧适配 ${size.width} × ${size.height}。GIF 按帧数与处理预算自动缩放，原始 GIF 可无损还原。`
-        : `静态原图将逐帧适配 GIF 预设；输出最多 ${size.width} × ${size.height}，还原时取回原静态文件。`
+        : `静态原图将逐帧适配 GIF 参考图；输出最多 ${size.width} × ${size.height}，还原时取回原静态文件。`
       : `上传 ${entry.width} × ${entry.height} → 处理及还原 ${size.width} × ${size.height}。${size.automatic ? '短边目标 1024、长边上限 2960 px，长图及大倍率优先限制输出像素量。' : '使用手动比例，保留原图长宽比。'}`;
   } catch (error) { $('#source-sizing-summary').textContent = error.message; }
 }
@@ -193,19 +194,21 @@ function createRow(entry, kind) {
   const text = document.createElement('span'); text.className = 'batch-copy';
   const name = document.createElement('strong'); name.textContent = entry.file.name;
   const detail = document.createElement('small'); text.append(name, detail);
-  const ring = document.createElement('span'); ring.className = 'progress-ring'; ring.setAttribute('role', 'progressbar'); ring.setAttribute('aria-valuemin', '0'); ring.setAttribute('aria-valuemax', '100');
-  select.append(image, text, ring); select.addEventListener('click', () => selectEntry(entry, kind));
+  const ring = document.createElement('button'); ring.type = 'button'; ring.className = 'progress-ring';
+  const progress = document.createElement('span'); progress.setAttribute('role', 'progressbar'); progress.setAttribute('aria-valuemin', '0'); progress.setAttribute('aria-valuemax', '100'); ring.append(progress);
+  ring.addEventListener('click', () => processSingle(entry, kind));
+  select.append(image, text); select.addEventListener('click', () => selectEntry(entry, kind));
   const actions = document.createElement('span'); actions.className = 'batch-item-actions';
   const download = document.createElement('button'); download.type = 'button'; download.className = 'batch-download'; download.textContent = '↓'; download.title = '下载此条目';
   download.setAttribute('aria-label', `下载 ${entry.file.name}`); download.addEventListener('click', () => { if (isReady(entry)) downloadBlob(kind === 'encode' ? entry.result.jpg : entry.result.blob, filename(entry, kind)); });
   const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'batch-remove'; remove.textContent = '×'; remove.title = `移除 ${entry.file.name}`;
   remove.setAttribute('aria-label', remove.title); remove.addEventListener('click', () => removeEntry(entry, kind));
-  actions.append(download, remove); row.append(select, actions);
-  entry.ui = { row, select, image, detail, ring, download }; $(`#${kind === 'encode' ? 'source' : 'decode'}-list`).append(row);
+  actions.append(download, remove); row.append(select, ring, actions);
+  entry.ui = { row, select, image, detail, ring, progress, download }; $(`#${kind === 'encode' ? 'source' : 'decode'}-list`).append(row);
 }
 
 function renderRow(entry, kind) {
-  const { row, select, image, detail, ring, download } = entry.ui;
+  const { row, select, image, detail, ring, progress, download } = entry.ui;
   const active = activeEntry(kind) === entry; const percent = Math.round((entry.progress ?? 0) * 100);
   row.dataset.status = entry.status; row.classList.toggle('is-active', active); select.setAttribute('aria-pressed', String(active));
   select.title = `${entry.file.name} · ${entry.label}`;
@@ -213,22 +216,39 @@ function renderRow(entry, kind) {
   image.hidden = !entry.thumbnail;
   detail.textContent = kind === 'decode' && entry.status === 'done' ? `${entry.result.plan.width} × ${entry.result.plan.height} · 还原完成` : entry.label;
   ring.style.setProperty('--progress', `${percent * 3.6}deg`);
-  ring.textContent = entry.status === 'done' ? '✓' : entry.status === 'error' || entry.status === 'warning' ? '!' : isProcessing(entry) ? `${percent}%` : '·';
-  ring.setAttribute('aria-valuenow', String(percent)); ring.setAttribute('aria-label', `${entry.file.name}：${entry.label}`);
+  progress.textContent = entry.status === 'done' ? '✓' : entry.status === 'error' || entry.status === 'warning' ? '!' : isProcessing(entry) ? `${percent}%` : '▶';
+  progress.setAttribute('aria-valuenow', String(percent)); progress.setAttribute('aria-label', `${entry.file.name}：${entry.label}`);
+  ring.disabled = !entry.width || entry.status === 'loading' || isProcessing(entry) || (kind === 'encode' && !state.presetsReady);
+  ring.title = isProcessing(entry) ? `${entry.file.name}：${entry.label}` : `${entry.started ? '重新' : '单独'}${kind === 'encode' ? '生成' : '还原'}此图：${entry.file.name}`;
+  ring.setAttribute('aria-label', ring.title);
   download.disabled = !isReady(entry);
 }
 
 function syncBatch(kind) {
   const entries = state[kind]; entries.forEach(entry => renderRow(entry, kind));
   const running = entries.filter(isProcessing).length; const ready = entries.filter(isReady).length;
+  const loading = entries.filter(entry => entry.status === 'loading').length;
+  const processableItems = entries.filter(entry => entry.width && entry.status !== 'loading');
+  const processable = entries.filter(entry => entry.width && entry.status !== 'loading' && !isProcessing(entry));
+  const pending = processable.filter(entry => !isReady(entry)).length;
+  const allReady = processableItems.length > 0 && processableItems.every(isReady);
   const button = $(`#${kind === 'encode' ? 'encode' : 'decode'}-button`);
-  button.disabled = (kind === 'encode' && !state.presetsReady) || !entries.some(entry => entry.width && !isProcessing(entry) && entry.status !== 'loading');
+  button.disabled = kind === 'encode'
+    ? !state.presetsReady || entries.length === 0 || loading > 0 || running > 0 || (pending === 0 && !allReady)
+    : !entries.some(entry => entry.width && !isProcessing(entry) && entry.status !== 'loading');
   button.classList.toggle('is-busy', running > 0);
-  button.textContent = kind === 'encode' ? entries.length > 1 ? `生成全部混淆图（${entries.length}）` : ready ? '重新生成混淆图' : '生成混淆图'
+  button.textContent = kind === 'encode'
+    ? !entries.length ? '请选择图片'
+      : !state.presetsReady ? '正在准备参考图…'
+        : loading ? '正在读取图片…'
+          : running ? `正在处理 ${entries.filter(entry => isProcessing(entry)).length}/${entries.length} 张`
+            : allReady ? `重新生成全部混淆图（${processableItems.length}）`
+              : pending ? ready ? `继续处理剩余图片（${pending}）` : `生成全部混淆图（${pending}）`
+                : '没有可处理的图片'
     : entries.length > 1 ? `还原全部图像（${entries.length}）` : '还原图像';
   const all = $(`#download-all-${kind === 'encode' ? 'encoded' : 'restored'}`);
   all.hidden = entries.length < 2; all.disabled = !ready || all.dataset.packing === 'true';
-  if (all.dataset.packing !== 'true') all.textContent = `下载全部${kind === 'encode' ? '混淆图' : '还原图'}（${ready}，ZIP）`;
+  if (all.dataset.packing !== 'true') all.textContent = `下载全部${kind === 'encode' ? '混淆图' : '还原图'}（${ready}张，打包为ZIP）`;
   const failed = entries.filter(entry => entry.status === 'error').length;
   $(`#${kind}-batch-summary`).textContent = entries.length ? `${ready}/${entries.length} 已完成${running ? ` · ${running} 项处理中或等待中` : ''}${failed ? ` · ${failed} 项失败，可重试` : ''}` : '';
   document.body.classList.toggle('has-source', state.encode.length > 0);
@@ -274,12 +294,12 @@ async function renderEncode(entry) {
   $('#preview-area').hidden = !result && !entry.started; syncDesktopLayout();
   for (const name of ['mosaic', 'restored', 'target']) $(`#${name}-empty`).hidden = !entry.started ? false : Boolean(result && (name !== 'restored' || result.restoredPreview));
   $('#mosaic-empty').textContent = entry.status === 'error' ? '生成失败，可调整设置后重试' : entry.label;
-  $('#restored-title').textContent = result?.isGif ? '还原后的原图' : 'JPG 还原效果';
+  $('#restored-title').textContent = result?.isGif ? '还原后的图片效果' : 'JPG 还原效果';
   $('#restored-empty').textContent = result?.warning ? '可提高 JPG 质量后再次尝试' : result?.isGif ? result.originalMime === 'image/gif' ? '这里会显示还原后的原动画' : '这里会显示还原后的原图' : '生成后显示 JPG 还原效果';
   $('#mosaic-dimensions').textContent = result ? `${result.plan.outputWidth} × ${result.plan.outputHeight}` : '等待生成';
   $('#target-dimensions').textContent = result ? `${result.targetWidth ?? result.plan.outputWidth} × ${result.targetHeight ?? result.plan.outputHeight}` : '与混淆图同尺寸';
   $('#restored-score').textContent = result ? result.warning ? '当前 JPG 无法还原' : result.isGif ? result.originalMime === 'image/gif' ? '原 GIF 已完整还原' : '原静态图已完整还原' : `来自 JPG ${result.quality}%` : '等待生成';
-  $('#preset-score').textContent = result ? result.isGif ? `预设相似度评分（逐帧平均）· 轮廓 ${result.resemblance.outline.toFixed(4)} · 细节 ${result.resemblance.detail.toFixed(4)} · 共 ${result.targetFrames} 帧` : `JPG 中的预设相似度评分 · 轮廓 ${result.resemblance.outline.toFixed(4)} · 细节 ${result.resemblance.detail.toFixed(4)}` : '混淆图与预设的相似度评分（越高越像）';
+  $('#preset-score').textContent = result ? result.isGif ? `与参考图的相似度评分（逐帧平均）· 轮廓 ${result.resemblance.outline.toFixed(4)} · 细节 ${result.resemblance.detail.toFixed(4)} · 共 ${result.targetFrames} 帧` : `JPG 与参考图的相似度评分 · 轮廓 ${result.resemblance.outline.toFixed(4)} · 细节 ${result.resemblance.detail.toFixed(4)}` : '混淆图与参考图的相似度评分（越高越像）';
   $('#restore-metrics').textContent = result ? result.warning ?? (result.isGif ? `原图保存在 GIF 中 · ${formatBytes(result.originalBytes)}` : `JPG 还原效果评分 · ${result.restoredSSIM.toFixed(4)}`) : '生成后显示还原效果评分';
   const plan = result?.plan;
   $('#applied-options').textContent = plan ? animatedOutput ? `GIF 动画 · ${result.gifFrames} 帧 · ${plan.width} × ${plan.height} · 保留 ${Math.round(plan.colorGain * 100)}% 原图细节` : `${entry.settings.manual ? '自定义' : '自动'}设置 · ${plan.tileSize} px 图块 · 混淆图放大 ${plan.scale} 倍 · ${plan.panels} 段处理 · 保留 ${Math.round(plan.colorGain * 100)}% 原图细节${plan.transparentPixels ? ' · 透明部分已铺白底' : ''}` : '生成后显示实际使用的设置';
@@ -298,8 +318,9 @@ async function renderEncode(entry) {
 async function renderDecode(entry) {
   const token = ++state.decodePaint; const current = () => activeEntry('decode') === entry && token === state.decodePaint;
   $('#download-restored').disabled = !isReady(entry);
+  $('#download-restored').hidden = !isReady(entry);
   const restoredMime = entry?.result?.mime;
-  $('#download-restored').textContent = restoredMime === 'image/gif' || (!restoredMime && entry?.isGif) ? '下载还原 GIF' : '下载还原图像';
+  $('#download-restored').textContent = restoredMime === 'image/gif' || (!restoredMime && entry?.isGif) ? '下载本条还原 GIF' : '下载本条还原图像';
   $('#decode-empty').hidden = Boolean(isReady(entry));
   $('#decode-empty').textContent = entry?.label ?? '选择混淆图文件';
   $('#encoded-meta').textContent = entry?.width ? `${entry.file.name} · ${entry.width} × ${entry.height}` : '选择要还原的混淆图';
@@ -331,10 +352,9 @@ async function importFiles(files, kind) {
   if (!images.length) throw new Error('请选择有效的图像文件。');
   const settings = readSettings();
   const typedImages = await Promise.all(images.map(async file => ({ file, isGif: isGif(new Uint8Array(await file.slice(0, 6).arrayBuffer())) })));
-  const unifiedMode = $('#unify-settings').checked ? typedImages.some(({ isGif: animatedSource }) => animatedSource) : null;
   const entries = typedImages.map(({ file, isGif: animatedSource }) => ({
     id: crypto.randomUUID(), file, isGif: animatedSource,
-    settings: settingsForConversion(settings, unifiedMode ?? animatedSource),
+    settings: settingsForConversion(settings, animatedSource, settings.preset, state.settingsTouched), settingsTouched: new Set(state.settingsTouched),
     version: 0, status: 'loading', label: '读取图像…', progress: 0, result: null, started: false,
   }));
   for (const entry of entries) { state[kind].push(entry); createRow(entry, kind); }
@@ -354,19 +374,25 @@ async function importFiles(files, kind) {
   }
 }
 
-function settingsChanged({ qualityOnly = false } = {}) {
+function settingsChanged({ qualityOnly = false, presetOnly = false } = {}) {
   syncSettings(); const settings = readSettings();
-  const entries = $('#unify-settings').checked ? state.encode : [activeEntry('encode')].filter(Boolean);
+  const entries = presetOnly && $('#unify-preset').checked ? state.encode : [activeEntry('encode')].filter(Boolean);
   for (const entry of entries) {
-    if (qualityOnly && (entry.isGif || animatedPreset(settings.preset))) { entry.settings = { ...settings }; continue; }
-    if (JSON.stringify(entry.settings) === JSON.stringify(settings)) continue;
+    const next = presetOnly ? entry.settings.preset === settings.preset ? entry.settings
+      : settingsForConversion({ ...entry.settings, preset: settings.preset }, entry.isGif, settings.preset, entry.settingsTouched) : settings;
+    if (qualityOnly && (entry.isGif || animatedPreset(next.preset))) { entry.settings = { ...next }; continue; }
+    if (JSON.stringify(entry.settings) === JSON.stringify(next)) continue;
     const started = entry.started;
     let cache = qualityOnly ? entry.result ?? entry.cached : null;
-    if (cache && !settings.manual && cache.plan.step !== processingOptions(settings).step) cache = null;
-    cancelEntry(entry); entry.settings = { ...settings }; entry.cached = cache; entry.result = null;
+    if (cache && !next.manual && cache.plan.step !== processingOptions(next).step) cache = null;
+    cancelEntry(entry); entry.settings = { ...next }; entry.cached = cache; entry.result = null;
     if (entry.status === 'loading') continue;
     entry.status = 'idle'; entry.progress = 0; entry.label = started ? '设置已更新，等待重新生成' : '已载入，等待处理';
     if (started) scheduleEntry(entry, 'encode', 350);
+  }
+  if (presetOnly) {
+    const active = activeEntry('encode');
+    if (active) writeSettings(active.settings); else applyConversionDefaults();
   }
   syncSourceMeta(activeEntry('encode')); syncBatch('encode'); refreshPreview('encode');
 }
@@ -385,7 +411,7 @@ async function processEntry(entry, kind) {
   try {
     if (kind === 'encode') {
       const index = PRESETS.findIndex(preset => presetKey(preset) === settings.preset);
-      if (index < 0) throw new Error('所选预设已删除，请重新选择。');
+      if (index < 0) throw new Error('所选参考图已删除，请重新选择。');
       const targetGif = state.presetGifBytes[index];
       if (entry.isGif || targetGif) {
         memory = Math.min(pool.memoryBudget, Math.max(128 * 1048576, entry.file.size * 24 + 64 * 1048576));
@@ -427,9 +453,20 @@ async function processEntry(entry, kind) {
 }
 
 function processBatch(kind) {
-  for (const entry of state[kind]) if (entry.width && entry.status !== 'loading' && !isProcessing(entry)) scheduleEntry(entry, kind);
+  const entries = state[kind];
+  const processableItems = entries.filter(entry => entry.width && entry.status !== 'loading');
+  const restartAll = kind === 'encode' && processableItems.length > 0 && processableItems.every(isReady);
+  if (kind === 'encode' && (entries.some(entry => entry.status === 'loading' || isProcessing(entry)) || !state.presetsReady)) return;
+  for (const entry of entries) {
+    if (entry.width && entry.status !== 'loading' && !isProcessing(entry) && (kind !== 'encode' || restartAll || !isReady(entry))) scheduleEntry(entry, kind);
+  }
   syncBatch(kind); refreshPreview(kind);
   if (kind === 'encode' && matchMedia('(max-width: 640px)').matches) requestAnimationFrame(() => $('#preview-area').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' }));
+}
+
+function processSingle(entry, kind) {
+  if (!entry.width || entry.status === 'loading' || isProcessing(entry) || (kind === 'encode' && !state.presetsReady)) return;
+  scheduleEntry(entry, kind); selectEntry(entry, kind);
 }
 
 async function downloadAll(kind) {
@@ -465,13 +502,10 @@ function setPreset(index, notify = true) {
     button.classList.toggle('is-active', active); button.setAttribute('aria-checked', String(active)); button.tabIndex = active ? 0 : -1;
   });
   const image = state.presetImages[index];
-  $('#custom-preset-hint').textContent = preset.filename ? `${preset.saved ? '已保存在这台设备' : '仅本次可用'} · ${image.width} × ${image.height}` : '新加的预设会保存在这台设备上。';
+  $('#custom-preset-hint').textContent = preset.filename ? `${preset.saved ? '已保存在这台设备' : '仅本次可用'} · ${image.width} × ${image.height}` : '新加的参考图会保存在这台设备上。';
   $('#selected-preset-name').textContent = preset.name;
   if (notify && changed) {
-    const settings = applyConversionDefaults();
-    const entry = activeEntry('encode');
-    if (entry) entry.settings = { ...entry.settings, balance: settings.balance, tileSize: settings.tileSize };
-    settingsChanged();
+    settingsChanged({ presetOnly: true });
   }
 }
 
@@ -489,7 +523,7 @@ function appendPreset(preset, index) {
     const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'preset-remove'; remove.textContent = '×'; remove.title = `删除 ${preset.name}`; remove.setAttribute('aria-label', remove.title);
     remove.addEventListener('click', async () => {
       remove.disabled = true;
-      try { await removeCustomPreset(preset); } catch (error) { remove.disabled = false; showToast(`未能删除预设：${error.message}`, true); }
+      try { await removeCustomPreset(preset); } catch (error) { remove.disabled = false; showToast(`未能删除参考图：${error.message}`, true); }
     }); card.append(remove);
   }
   $('#preset-list').append(card);
@@ -498,7 +532,7 @@ function appendPreset(preset, index) {
 async function initializePresets() {
   const lastSelected = selectedPreset();
   const loaded = await Promise.all(PRESETS.map(async preset => {
-    const response = await fetch(preset.src); if (!response.ok) throw new Error(`无法加载预设图：${preset.name}`);
+    const response = await fetch(preset.src); if (!response.ok) throw new Error(`无法加载参考图：${preset.name}`);
     const blob = await response.blob(); const bytes = preset.animated ? new Uint8Array(await blob.arrayBuffer()) : null;
     const bitmap = await createImageBitmap(blob); const canvas = bitmapCanvas(bitmap); bitmap.close();
     const image = { width: canvas.width, height: canvas.height, data: canvasPixels(canvas) }; canvas.width = canvas.height = 0; return { image, bytes };
@@ -511,14 +545,14 @@ async function initializePresets() {
       state.presetImages.push({ width: canvas.width, height: canvas.height, data: canvasPixels(canvas) });
       state.presetGifBytes.push(record.blob.type === 'image/gif' ? new Uint8Array(await record.blob.arrayBuffer()) : null); canvas.width = canvas.height = 0;
     }
-  } catch { showToast('浏览器本地存储暂不可用，自定义预设仍可在本次使用。'); }
+  } catch { showToast('浏览器本地存储暂不可用，自定义参考图仍可在本次使用。'); }
   const index = PRESETS.findIndex(preset => presetKey(preset) === lastSelected); renderPresets(index < 0 ? 0 : index);
-  const defaults = applyConversionDefaults(false);
+  const key = presetKey(PRESETS[state.presetIndex]);
+  for (const entry of state.encode) if (!entry.started) entry.settings = settingsForConversion({ ...entry.settings, preset: key }, entry.isGif, key, entry.settingsTouched);
   const initialEntry = activeEntry('encode');
-  if (initialEntry) initialEntry.settings = { ...initialEntry.settings, balance: defaults.balance, tileSize: defaults.tileSize };
+  if (initialEntry) writeSettings(initialEntry.settings); else applyConversionDefaults(false);
   state.presetsReady = true; syncBatch('encode');
   $('#custom-preset-picker').disabled = false;
-  for (const entry of state.encode) if (!entry.started) entry.settings.preset = presetKey(PRESETS[state.presetIndex]);
 }
 
 async function removeCustomPreset(preset) {
@@ -528,20 +562,21 @@ async function removeCustomPreset(preset) {
   const [image] = state.presetImages.splice(index, 1); state.presetGifBytes.splice(index, 1); PRESETS.splice(index, 1);
   renderPresets(wasSelected ? 0 : PRESETS.indexOf(selected));
   for (const entry of state.encode) if (entry.settings.preset === preset.id) {
-    cancelEntry(entry); entry.settings.preset = presetKey(PRESETS[0]); entry.result = entry.cached = null; entry.status = 'idle'; entry.label = '预设已删除，已切换默认预设';
+    cancelEntry(entry); entry.settings = settingsForConversion({ ...entry.settings, preset: presetKey(PRESETS[0]) }, entry.isGif, presetKey(PRESETS[0]), entry.settingsTouched); entry.result = entry.cached = null; entry.status = 'idle'; entry.label = '参考图已删除，已切换默认参考图';
     if (entry.started) scheduleEntry(entry, 'encode', 350);
   }
+  if (activeEntry('encode')) writeSettings(activeEntry('encode').settings);
   syncBatch('encode'); refreshPreview('encode'); URL.revokeObjectURL(preset.src);
   showToast(`已删除「${preset.name}」`, false, { label: '撤销', run: async () => {
     if (preset.saved) await savePreset(preset.record);
     if (PRESETS.some(item => item.id === preset.id)) return;
     preset.src = URL.createObjectURL(preset.record.blob); PRESETS.push(preset); state.presetImages.push(image); state.presetGifBytes.push(preset.animated ? new Uint8Array(await preset.record.blob.arrayBuffer()) : null); renderPresets(wasSelected ? PRESETS.length - 1 : state.presetIndex);
-    if (wasSelected) settingsChanged();
+    if (wasSelected) settingsChanged({ presetOnly: true });
   } });
 }
 
 async function loadCustomPreset(file) {
-  if (!file?.type.startsWith('image/')) throw new Error('请选择有效的预设图片。');
+  if (!file?.type.startsWith('image/')) throw new Error('请选择有效的参考图。');
   const animated = isGif(new Uint8Array(await file.slice(0, 6).arrayBuffer()));
   const bitmap = await createImageBitmap(file); const scale = Math.min(1, 1536 / Math.max(bitmap.width, bitmap.height));
   const canvas = bitmapCanvas(bitmap, Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale))); bitmap.close();
@@ -549,10 +584,10 @@ async function loadCustomPreset(file) {
   const hash = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
   const id = Array.from(new Uint8Array(hash), byte => byte.toString(16).padStart(2, '0')).join('');
   const existing = PRESETS.findIndex(preset => preset.id === id);
-  if (existing >= 0) { setPreset(existing); showToast('这张图片已经在你的预设中。'); return; }
-  const record = { id, name: file.name.replace(/\.[^.]+$/, '') || '自定义预设', filename: file.name, blob, createdAt: Date.now() };
+  if (existing >= 0) { setPreset(existing); showToast('这张图片已经在你的参考图中。'); return; }
+  const record = { id, name: file.name.replace(/\.[^.]+$/, '') || '自定义参考图', filename: file.name, blob, createdAt: Date.now() };
   let saved = true;
-  try { await savePreset(record); } catch { saved = false; showToast('本地保存未成功，这张预设仍可在本次使用。', true); }
+  try { await savePreset(record); } catch { saved = false; showToast('本地保存未成功，这张参考图仍可在本次使用。', true); }
   const preset = { id, name: record.name, filename: file.name, src: URL.createObjectURL(blob), saved, record, animated };
   PRESETS.push(preset); state.presetImages.push(image); state.presetGifBytes.push(animated ? new Uint8Array(await blob.arrayBuffer()) : null); appendPreset(preset, PRESETS.length - 1); setPreset(PRESETS.length - 1);
 }
@@ -573,10 +608,10 @@ for (const [inputId, pickerId, kind] of [['source-file', 'source-picker', 'encod
 }
 $('#encode-button').addEventListener('click', () => processBatch('encode'));
 $('#decode-button').addEventListener('click', () => processBatch('decode'));
-$('#unify-settings').addEventListener('change', () => { if ($('#unify-settings').checked) settingsChanged(); else syncSettings(); });
+$('#unify-preset').addEventListener('change', () => { if ($('#unify-preset').checked) settingsChanged({ presetOnly: true }); else syncSettings(); });
 for (const [key, [id, type]] of Object.entries(fields)) {
   $(`#${id}`).addEventListener(type === 'checkbox' || id === 'source-scale' ? 'change' : 'input', () => {
-    if (key === 'balance' || key === 'tileSize') state.settingsTouched.add(key);
+    if (key === 'balance' || key === 'tileSize') (activeEntry('encode')?.settingsTouched ?? state.settingsTouched).add(key);
     settingsChanged({ qualityOnly: key === 'quality' });
   });
 }
@@ -612,3 +647,15 @@ document.querySelectorAll('.tab').forEach(button => button.addEventListener('cli
 }));
 initializePresets().catch(error => showToast(error.message, true));
 syncSettings(); syncBatch('encode'); syncBatch('decode');
+initializeTutorial();
+
+$('.workbench').addEventListener('wheel', event => {
+  if (matchMedia('(max-width: 640px)').matches || event.ctrlKey || !event.deltaY) return;
+  const advanced = event.target.closest('#advanced-settings');
+  const content = $('.advanced-content');
+  const delta = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * 16
+    : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? event.deltaY * content.clientHeight : event.deltaY;
+  if (advanced?.open) content.scrollTop += delta;
+  else window.scrollBy(0, delta);
+  event.preventDefault();
+}, { passive: false });

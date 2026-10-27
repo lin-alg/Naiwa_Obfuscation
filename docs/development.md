@@ -20,7 +20,7 @@ node tests/compatibility.mjs
 node tests/zip-selftest.mjs
 ```
 
-`browser-smoke.mjs` 覆盖页面设置、图片生成与还原、预览、下载、预设、GIF、ZIP 和响应式布局。追加 `--background` 可后台运行；追加 `--reports` 会检查交互式评测页面。
+`browser-smoke.mjs` 覆盖新手引导及其本地记录、参考图共享与独立参数、圆环单张处理、图片生成与还原、预览、下载、参考图、GIF、ZIP 和响应式布局。追加 `--tutorial-only` 可只验证新手引导；追加 `--background` 可后台运行；追加 `--reports` 会检查交互式评测页面。
 
 ```powershell
 node tests/browser-smoke.mjs
@@ -50,8 +50,8 @@ node --expose-gc tests/benchmark.mjs --count=4 --profiles=2:16:0.5,2:16:0.75,3:1
 | `node tests/preview.mjs` | 导出单张算法预览图 |
 | `node tests/profile-summary.mjs` | 汇总已有性能剖析数据 |
 
-评测脚本读取 `tests/fixtures/` 中的样本，内置预设来自 `assets/images/`。临时日志、下载和浏览器配置保存在被忽略的 `.test-artifacts/`；长期 HTML、JSON、CSV 和曲线报告写入被忽略的 `reports/`。
+评测脚本读取 `tests/fixtures/` 中的样本，内置参考图来自 `assets/images/`。临时日志、下载和浏览器配置保存在被忽略的 `.test-artifacts/`；长期 HTML、JSON、CSV 和曲线报告写入被忽略的 `reports/`。
 
-评测主要比较 JPG 文件大小、还原 SSIM 和混淆图与预设的相似度。SSIM 使用互不重叠的 8×8 局部窗口；恢复分数在最长边约 512 px 的亮度图上计算，预设轮廓分数在最长边约 64 px 的 RGB 图上计算，预设细节分数在最长边约 512 px 的 RGB 图上计算。缩图评测以缩小后 JPEG-95 文件大小为基准，不应与原图分辨率结果直接比较。
+评测主要比较 JPG 文件大小、还原 SSIM 和混淆图与参考图的相似度。SSIM 使用互不重叠的 8×8 局部窗口；恢复分数在最长边约 512 px 的亮度图上计算，参考图轮廓分数在最长边约 64 px 的 RGB 图上计算，参考图细节分数在最长边约 512 px 的 RGB 图上计算。缩图评测以缩小后 JPEG-95 文件大小为基准，不应与原图分辨率结果直接比较。
 
 评测报告页面可通过 `reports/index.html` 查看；浏览器测试检查评测页面时需要本地已有报告文件。历史性能数据与复测步骤见[性能记录](PERFORMANCE.md)。

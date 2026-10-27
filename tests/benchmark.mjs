@@ -154,11 +154,11 @@ await writeFile(new URL(`${reportName}.json`, root), JSON.stringify(report, null
 await writeFile(new URL(`${reportName}.csv`, root), csv);
 
 const colors = ['#47753e', '#3269a8', '#bf5e42', '#8657a3', '#b0811d', '#267f84', '#b44879', '#57618f', '#6b7853', '#a56635', '#8c4253', '#46635e'];
-const columnLabels = { config: '设置', quality: 'JPG质量', samples: '样本数', mixedSize: '文件大小/原图', restoredSSIM: '还原效果分', presetSSIM: '预设平均分', minPresetSSIM: '预设最低分', presetDetail: '预设细节分', decoded: '还原成功率', baseSize: '原图JPG大小', baseSSIM: '原图JPG效果', eligible: '符合条件', pareto: '推荐' };
+const columnLabels = { config: '设置', quality: 'JPG质量', samples: '样本数', mixedSize: '文件大小/原图', restoredSSIM: '还原效果分', presetSSIM: '参考图平均分', minPresetSSIM: '参考图最低分', presetDetail: '参考图细节分', decoded: '还原成功率', baseSize: '原图JPG大小', baseSSIM: '原图JPG效果', eligible: '符合条件', pareto: '推荐' };
 function describeConfig(id) {
   const match = id.match(/^(\d+)px-(\d+(?:\.\d+)?)x-s\d+(-color([\d.]*))?$/);
   if (!match) return id;
-  const detail = match[3] === undefined ? '' : match[4] ? ` · 保留 ${Math.round(Number(match[4]) * 100)}% 原图细节` : ' · 按预设调整颜色';
+  const detail = match[3] === undefined ? '' : match[4] ? ` · 保留 ${Math.round(Number(match[4]) * 100)}% 原图细节` : ' · 按参考图调整颜色';
   return `${match[1]} px 图块 · 放大 ${match[2]} 倍${detail}`;
 }
 function plot(yKey, title) {
@@ -173,7 +173,7 @@ function plot(yKey, title) {
     const rows = summary.filter((row) => row.config === config.id);
     const color = colors[index % colors.length];
     svg += `<polyline points="${rows.map((row) => `${x(row.mixedSize)},${y(row[yKey])}`).join(' ')}" fill="none" stroke="${color}" stroke-width="2"/>`;
-    for (const row of rows) svg += `<circle cx="${x(row.mixedSize)}" cy="${y(row[yKey])}" r="${row.pareto ? 6 : 4}" fill="${row.eligible ? color : 'white'}" stroke="${color}" stroke-width="2"><title>${describeConfig(row.config)} · JPG ${row.quality} · 文件大小 ${(row.mixedSize * 100).toFixed(1)}% · 还原评分 ${row.restoredSSIM.toFixed(4)} · 预设最低分 ${row.minPresetSSIM.toFixed(4)}</title></circle>`;
+    for (const row of rows) svg += `<circle cx="${x(row.mixedSize)}" cy="${y(row[yKey])}" r="${row.pareto ? 6 : 4}" fill="${row.eligible ? color : 'white'}" stroke="${color}" stroke-width="2"><title>${describeConfig(row.config)} · JPG ${row.quality} · 文件大小 ${(row.mixedSize * 100).toFixed(1)}% · 还原评分 ${row.restoredSSIM.toFixed(4)} · 参考图最低分 ${row.minPresetSSIM.toFixed(4)}</title></circle>`;
   });
   if (yKey === 'restoredSSIM') {
     const rows = summary.filter((row) => row.config === configs[0].id);
@@ -182,11 +182,11 @@ function plot(yKey, title) {
   return svg + '<text x="495" y="450" text-anchor="middle">JPG 文件大小 / 原图大小（包含整张混淆图）</text></svg>';
 }
 const recoveryPlot = plot('restoredSSIM', '还原效果评分与 JPG 文件大小 · 黑色虚线为直接保存原图');
-const resemblancePlot = plot('minPresetSSIM', '预设外观最低分与 JPG 文件大小');
+const resemblancePlot = plot('minPresetSSIM', '参考图外观最低分与 JPG 文件大小');
 await writeFile(new URL(`${reportName}-recovery.svg`, root), recoveryPlot);
 await writeFile(new URL(`${reportName}-preset.svg`, root), resemblancePlot);
 const escape = (value) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
-const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>奶蛙混淆测试报告</title><style>body{font:15px/1.7 system-ui;max-width:1200px;margin:32px auto;padding:16px;color:#253c2e}svg{width:100%}table{border-collapse:collapse;width:100%}td,th{padding:8px;border:1px solid #ddd;text-align:right}label{display:inline-block;padding:8px}tr[data-eligible=false]{color:#888}.legend{display:flex;flex-wrap:wrap;gap:8px}</style><h1>奶蛙混淆批量测试 · v${FORMAT_VERSION}</h1><p>${escape(started)} · ${entries.length} 张原图 × ${presets.length} 个预设 · 预设外观最低分 ${threshold} · 图片尺寸：${maxSide ? `最长边 ${maxSide} px` : '原始尺寸'}。空心点表示至少一张图片未达到要求；实心点表示全部图片都能还原且达到当前分数要求。较大的点表示文件大小、还原效果和预设外观兼顾得较好的设置。将鼠标移到图表上的点可查看数值。</p><p>测试中的透明部分统一铺成白色。文件大小按 ${maxSide ? '缩小后的原图' : '原图'} 计算；FFmpeg 的 JPG 质量档位与浏览器设置不能直接换算。</p><div class="legend">${configs.map((config, i) => `<label style="color:${colors[i % colors.length]}">${describeConfig(config.id)}</label>`).join('')}</div>${recoveryPlot}${resemblancePlot}<p>还原失败的效果分记为 0。最低分取所有原图和预设组合中的最小值。测试结果只适用于列出的图片，不保证其他图片也达到相同效果。</p><label><input id="only" type="checkbox">只看符合条件的设置</label><table><thead><tr>${columns.map((key) => `<th>${columnLabels[key] ?? key}</th>`).join('')}</tr></thead><tbody>${summary.map((row) => `<tr data-eligible="${row.eligible}">${columns.map((key) => `<td>${key === 'config' ? describeConfig(row[key]) : typeof row[key] === 'number' && !Number.isInteger(row[key]) ? row[key].toFixed(4) : key === 'eligible' ? row[key] ? '是' : '否' : key === 'pareto' ? row[key] ? '推荐' : '' : escape(row[key])}</td>`).join('')}</tr>`).join('')}</tbody></table><script>document.querySelector('#only').onchange=e=>document.querySelectorAll('tbody tr').forEach(row=>row.hidden=e.target.checked&&row.dataset.eligible!=='true')</script></html>`;
+const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>奶蛙混淆测试报告</title><style>body{font:15px/1.7 system-ui;max-width:1200px;margin:32px auto;padding:16px;color:#253c2e}svg{width:100%}table{border-collapse:collapse;width:100%}td,th{padding:8px;border:1px solid #ddd;text-align:right}label{display:inline-block;padding:8px}tr[data-eligible=false]{color:#888}.legend{display:flex;flex-wrap:wrap;gap:8px}</style><h1>奶蛙混淆批量测试 · v${FORMAT_VERSION}</h1><p>${escape(started)} · ${entries.length} 张原图 × ${presets.length} 张参考图 · 参考图外观最低分 ${threshold} · 图片尺寸：${maxSide ? `最长边 ${maxSide} px` : '原始尺寸'}。空心点表示至少一张图片未达到要求；实心点表示全部图片都能还原且达到当前分数要求。较大的点表示文件大小、还原效果和参考图外观兼顾得较好的设置。将鼠标移到图表上的点可查看数值。</p><p>测试中的透明部分统一铺成白色。文件大小按 ${maxSide ? '缩小后的原图' : '原图'} 计算；FFmpeg 的 JPG 质量档位与浏览器设置不能直接换算。</p><div class="legend">${configs.map((config, i) => `<label style="color:${colors[i % colors.length]}">${describeConfig(config.id)}</label>`).join('')}</div>${recoveryPlot}${resemblancePlot}<p>还原失败的效果分记为 0。最低分取所有原图和参考图组合中的最小值。测试结果只适用于列出的图片，不保证其他图片也达到相同效果。</p><label><input id="only" type="checkbox">只看符合条件的设置</label><table><thead><tr>${columns.map((key) => `<th>${columnLabels[key] ?? key}</th>`).join('')}</tr></thead><tbody>${summary.map((row) => `<tr data-eligible="${row.eligible}">${columns.map((key) => `<td>${key === 'config' ? describeConfig(row[key]) : typeof row[key] === 'number' && !Number.isInteger(row[key]) ? row[key].toFixed(4) : key === 'eligible' ? row[key] ? '是' : '否' : key === 'pareto' ? row[key] ? '推荐' : '' : escape(row[key])}</td>`).join('')}</tr>`).join('')}</tbody></table><script>document.querySelector('#only').onchange=e=>document.querySelectorAll('tbody tr').forEach(row=>row.hidden=e.target.checked&&row.dataset.eligible!=='true')</script></html>`;
 await writeFile(new URL(`${reportName}.html`, root), html);
 console.log('\n' + csv);
 console.log(`Reports: reports/${reportName}.{json,csv,html}, reports/${reportName}-{recovery,preset}.svg; edge cases=${edgeCases.length}; failures=${failures.length}`);

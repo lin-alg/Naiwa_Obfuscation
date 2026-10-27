@@ -159,7 +159,7 @@ async function encodeGifFile({ file, targetGif, target: staticTarget, settings }
   for (const frame of sourceFrames) {
     const image = { width: sourceWidth, height: sourceHeight, data: await resizeFrame(frame, sourceWidth, sourceHeight) };
     while (targetFrames && targetProgress < targetMap[index]) {
-      const next = targetFrames.next(); if (next.done) throw new Error('GIF 预设动画帧对齐失败。');
+      const next = targetFrames.next(); if (next.done) throw new Error('GIF 参考图动画帧对齐失败。');
       targetProgress += 1;
       if (targetProgress === targetMap[index]) currentTarget = { width: targetWidth, height: targetHeight, data: await resizeFrame(next.value, targetWidth, targetHeight) };
     }
@@ -239,7 +239,7 @@ async function encodeStillAsGifFile({ file, targetGif, settings }, progress) {
       width: plan.outputWidth, height: plan.outputHeight, delay: frame.delay < 2 ? 10 : frame.delay, minimum: 8, palette: null, disposal: 1,
     }));
     index += 1;
-    if ((index & 3) === 0 || index === target.frames.length) progress({ label: `按动画预设处理第 ${index}/${target.frames.length} 帧`, fraction: 0.05 + index / target.frames.length * 0.82 });
+    if ((index & 3) === 0 || index === target.frames.length) progress({ label: `按动画参考图处理第 ${index}/${target.frames.length} 帧`, fraction: 0.05 + index / target.frames.length * 0.82 });
   }
   const packedOriginal = await compressGifBytes(original); const useCompression = packedOriginal.length < original.length;
   const transformed = concatBytes([gifHeader(plan.outputWidth, plan.outputHeight, palette, target.loop), gifPayloadBlock(original.length, useCompression ? packedOriginal : original, useCompression, mime), ...frames, Uint8Array.of(0x3b)]);

@@ -131,7 +131,7 @@ export function flattenImage(image, background = [255, 255, 255]) {
 }
 
 export function fitImage(image, width, height, mode = 'contain', panels = 1) {
-  if (!['contain', 'cover', 'stretch'].includes(mode)) throw new Error('未知的预设适配模式。');
+  if (!['contain', 'cover', 'stretch'].includes(mode)) throw new Error('未知的参考图适配模式。');
   if (panels > 1) {
     const data = new Uint8ClampedArray(width * height * 4);
     const horizontal = width >= height;
@@ -538,7 +538,7 @@ function readHeader(image) {
 export async function encodeImage(source, preset, options = {}) {
   let clock = performance.now();
   const timing = (label) => { const now = performance.now(); options.onTiming?.(label, now - clock); clock = now; };
-  options.onProgress?.({ label: '准备原图和预设', fraction: 0 });
+  options.onProgress?.({ label: '准备原图和参考图', fraction: 0 });
   const plan = createPlan(source.width, source.height, options);
   const step = clamp(Math.round(options.step ?? 16), 4, 96);
   const flattened = flattenImage(source);
@@ -546,7 +546,7 @@ export async function encodeImage(source, preset, options = {}) {
   const targetImage = fitImage(preset, plan.outputWidth, plan.outputHeight, options.fit ?? 'contain', plan.panels);
   const target = flattenImage(targetImage);
   timing('prepare');
-  options.onProgress?.({ label: '比对原图和预设', fraction: 0.15 });
+  options.onProgress?.({ label: '比对原图和参考图', fraction: 0.15 });
   await pause();
   const mapping = matchTiles(padded, target.data, plan);
   timing('match');

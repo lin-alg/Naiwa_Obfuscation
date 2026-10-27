@@ -18,7 +18,7 @@ python -m http.server 4173
 |---|---|
 | `index.html`, `styles.css` | 页面入口和样式 |
 | `src/` | 图片算法、页面逻辑、GIF 编解码、Worker 和下载模块 |
-| `assets/images/` | 应用内置静态及动画预设 |
+| `assets/images/` | 应用内置静态及动画参考图 |
 | `tests/` | Node.js 自测、浏览器测试和评测脚本 |
 | `tests/fixtures/` | 测试图片及样本清单，不参与应用运行 |
 | `docs/` | 使用指南、架构说明、开发说明和性能记录 |

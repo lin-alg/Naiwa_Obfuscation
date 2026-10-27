@@ -105,7 +105,7 @@ async function waitFor(expression, timeoutMs = 120000) {
     if (value) return value;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  const diagnostic = await evaluate(`({ presets:document.querySelectorAll('.preset-option').length, result:document.querySelector('#result-summary')?.textContent, toast:document.querySelector('#toast')?.textContent, custom:document.querySelector('#custom-preset-hint')?.textContent })`);
+  const diagnostic = await evaluate(`({ presets:document.querySelectorAll('.preset-option').length, result:document.querySelector('#result-summary')?.textContent, toast:document.querySelector('#toast')?.textContent, custom:document.querySelector('#custom-preset-hint')?.textContent, rows:[...document.querySelectorAll('.batch-item')].map(row=>({status:row.dataset.status,label:row.querySelector('small').textContent})), focus:document.activeElement?.outerHTML.slice(0,300) })`);
   throw new Error(`Timed out waiting for: ${expression}; ${JSON.stringify({ ...diagnostic, pageErrors })}`);
 }
 
@@ -126,13 +126,100 @@ async function screenshot(filename) {
   return path;
 }
 
-try {
+applicationChecks: try {
   await command('Runtime.enable');
   await command('Page.enable');
   await command('DOM.enable');
   await command('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads, eventsEnabled: true });
   await waitFor('document.querySelectorAll(".preset-option").length === 6');
   await waitFor('!document.querySelector("#custom-preset-picker").disabled');
+  await waitFor(`document.querySelector('.tutorial:not([hidden])')?.dataset.tour==='encode'`);
+  if (!await evaluate(`document.querySelector('.tutorial-next').disabled&&localStorage.getItem('naiwa-tutorial-v1-encode')===null`)) throw new Error('Tutorial must require the current action and remain unseen');
+  await screenshot('naiwa-tutorial-desktop.png');
+  await evaluate(`document.querySelector('.tutorial-next').click()`);
+  if (!await evaluate(`document.querySelector('.tutorial').dataset.step==='0'`)) throw new Error('Tutorial advanced before the upload action');
+  for (const width of [320, 390, 768, 1440]) {
+    await command('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: width < 500 });
+    await waitFor('document.querySelector(".tutorial-card").getBoundingClientRect().right<=innerWidth&&document.querySelector(".tutorial-card").getBoundingClientRect().left>=0');
+    const bounds = await evaluate(`(() => {const c=document.querySelector('.tutorial-card').getBoundingClientRect(),s=document.querySelector('.tutorial-spotlight').getBoundingClientRect();return {left:c.left,right:c.right,top:c.top,bottom:c.bottom,width:innerWidth,height:innerHeight,overlap:c.left<s.right&&c.right>s.left&&c.top<s.bottom&&c.bottom>s.top}})()`);
+    if (bounds.left < 0 || bounds.right > width || bounds.top < 0 || bounds.bottom > bounds.height + 1 || bounds.overlap) throw new Error(`Tutorial upload step is misplaced at ${width}px: ${JSON.stringify(bounds)}`);
+  }
+  await command('Emulation.clearDeviceMetricsOverride');
+  const tutorialImage = fileURLToPath(new URL('./fixtures/static/4.jpg', import.meta.url));
+  await setInputFile('#source-file', tutorialImage);
+  await waitFor(`document.querySelector('#source-list .batch-item[data-status="idle"]')`);
+  if (!await evaluate(`document.querySelector('#encode-button').textContent==='生成全部混淆图（1）'&&!document.querySelector('#encode-button').disabled`)) throw new Error('A loaded image should show an enabled first-generation action');
+  await waitFor(`!document.querySelector('.tutorial-next').disabled`);
+  await evaluate(`document.querySelector('.tutorial-next').click()`);
+  const unselectedPresetStep = await evaluate(`({step:document.querySelector('.tutorial').dataset.step,checked:document.querySelectorAll('#preset-list .preset-option[aria-checked="true"]').length,label:document.querySelector('#selected-preset-name').textContent,nextDisabled:document.querySelector('.tutorial-next').disabled})`);
+  if (unselectedPresetStep.step !== '1' || unselectedPresetStep.checked !== 0 || unselectedPresetStep.label !== '请选择' || !unselectedPresetStep.nextDisabled) throw new Error(`Reference selection tutorial must start with no selection: ${JSON.stringify(unselectedPresetStep)}`);
+  const referenceSpotlight = await evaluate(`(() => {const spot=document.querySelector('.tutorial-spotlight').getBoundingClientRect(),panel=document.querySelector('#reference-panel').getBoundingClientRect(),add=document.querySelector('#custom-preset-picker').getBoundingClientRect();return {spot:{left:spot.left,right:spot.right,top:spot.top,bottom:spot.bottom},panel:{left:panel.left,right:panel.right,top:panel.top,bottom:panel.bottom},add:{left:add.left,right:add.right,top:add.top,bottom:add.bottom}}})()`);
+  if (referenceSpotlight.spot.left > referenceSpotlight.panel.left || referenceSpotlight.spot.right < referenceSpotlight.panel.right || referenceSpotlight.spot.top > referenceSpotlight.panel.top || referenceSpotlight.spot.bottom < referenceSpotlight.add.bottom) throw new Error(`Reference tutorial spotlight must include the entire panel and custom image button: ${JSON.stringify(referenceSpotlight)}`);
+  await evaluate(`document.querySelector('.preset-option[data-index="1"]').click()`);
+  await waitFor(`!document.querySelector('.tutorial-next').disabled`);
+  if (!await evaluate(`document.querySelectorAll('#preset-list .preset-option[aria-checked="true"]').length===1&&document.querySelector('#selected-preset-name').textContent==='奶鼠'`)) throw new Error('Choosing a reference image should update the selected state before continuing');
+  await evaluate(`document.querySelector('.tutorial-next').click()`);
+  if (!await evaluate(`document.querySelector('.tutorial').dataset.step==='2'&&!document.querySelector('.tutorial-next').disabled`)) throw new Error('The shared preset explanation should not require toggling its checkbox');
+  await evaluate(`document.querySelector('.tutorial-next').click()`);
+  const outputStep = await evaluate(`({step:document.querySelector('.tutorial').dataset.step,label:document.querySelector('.tutorial-step-label').textContent,title:document.querySelector('#tutorial-title').textContent,text:document.querySelector('#tutorial-description').textContent})`);
+  if (outputStep.step !== '3' || outputStep.label !== '混淆图像： 04 / 06' || outputStep.title !== '输出选项' || !outputStep.text.includes('JPG 质量') || !outputStep.text.includes('效果偏向') || !outputStep.text.includes('分块越细')) throw new Error(`Output options must be explained in the encode tutorial: ${JSON.stringify(outputStep)}`);
+  const outputSpotlight = await evaluate(`(() => {const spot=document.querySelector('.tutorial-spotlight').getBoundingClientRect(),section=document.querySelector('.basic-settings').getBoundingClientRect(),controls=['#jpg-quality','#balance','#tile-size'].map(selector=>document.querySelector(selector).getBoundingClientRect());return {spot:{left:spot.left,right:spot.right,top:spot.top,bottom:spot.bottom},section:{left:section.left,right:section.right,top:section.top,bottom:section.bottom},controls}})()`);
+  if (outputSpotlight.spot.left > outputSpotlight.section.left || outputSpotlight.spot.right < outputSpotlight.section.right || outputSpotlight.controls.some(rect=>rect.left<outputSpotlight.spot.left||rect.right>outputSpotlight.spot.right||rect.top<outputSpotlight.spot.top||rect.bottom>outputSpotlight.spot.bottom)) throw new Error(`Output tutorial spotlight must include all three controls: ${JSON.stringify(outputSpotlight)}`);
+  await evaluate(`document.querySelector('.tutorial-next').click()`);
+  if (!await evaluate(`document.querySelector('.tutorial').dataset.step==='4'&&document.querySelector('.tutorial-next').disabled`)) throw new Error('Single-item processing should remain a required tutorial action');
+  await evaluate(`document.querySelector('#source-list .progress-ring').click()`);
+  if (!await evaluate(`document.querySelector('#encode-button').disabled&&document.querySelector('#encode-button').textContent==='正在处理 1/1 张'`)) throw new Error('The batch action should be disabled and show processing state while work is running');
+  await waitFor(`document.querySelector('#source-list .batch-item').dataset.status==='done'`);
+  await waitFor(`!document.querySelector('.tutorial-next').disabled`);
+  await command('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  const mobileRingCard = await evaluate(`(() => {const c=document.querySelector('.tutorial-card').getBoundingClientRect(),s=document.querySelector('.tutorial-spotlight').getBoundingClientRect();return c.left>=0&&c.right<=innerWidth&&c.top>=0&&c.bottom<=innerHeight&&!(c.left<s.right&&c.right>s.left&&c.top<s.bottom&&c.bottom>s.top)})()`);
+  if (!mobileRingCard) throw new Error('Mobile single-item instructions obscure the highlighted progress ring');
+  await screenshot('naiwa-tutorial-mobile-ring.png');
+  await command('Emulation.clearDeviceMetricsOverride');
+  await evaluate(`document.querySelector('.tutorial-next').click()`);
+  if (!await evaluate(`document.querySelector('.tutorial').dataset.step==='5'&&!document.querySelector('.tutorial-next').disabled`)) throw new Error('Batch and download notes should be informational');
+  const beforeTutorialDownload = finishedDownloads.length;
+  await evaluate(`document.querySelector('#download-button').click()`);
+  const tutorialDownloadStart = Date.now();
+  while (finishedDownloads.length < beforeTutorialDownload + 1 && Date.now() - tutorialDownloadStart < 20000) await new Promise(resolve => setTimeout(resolve, 100));
+  if (finishedDownloads.length < beforeTutorialDownload + 1) throw new Error('Could not prepare an encoded image for the decode tutorial');
+  await evaluate(`document.querySelector('.tutorial-next').click()`);
+  if (!await evaluate(`document.querySelector('.tutorial').hidden&&localStorage.getItem('naiwa-tutorial-v1-encode')==='1'&&localStorage.getItem('naiwa-tutorial-v1-decode')===null`)) throw new Error('Tutorial completion must be saved per section');
+  await evaluate(`document.querySelector('[data-view="decode"]').click()`);
+  await waitFor(`document.querySelector('.tutorial:not([hidden])')?.dataset.tour==='decode'`);
+  if (!await evaluate(`document.querySelector('.tutorial-next').disabled`)) throw new Error('Decode tutorial must wait for an image upload');
+  await setInputFile('#encoded-file', join(downloads, '4-obfuscated-q75.jpg'));
+  await waitFor(`document.querySelector('#decode-list .batch-item[data-status="idle"]')`);
+  await waitFor(`!document.querySelector('.tutorial-next').disabled`);
+  await evaluate(`document.querySelector('.tutorial-next').click()`);
+  if (!await evaluate(`document.querySelector('.tutorial-next').disabled`)) throw new Error('Decode single-item step should require processing the image');
+  await evaluate(`document.querySelector('#decode-list .progress-ring').click()`);
+  await waitFor(`document.querySelector('#decode-list .batch-item[data-status="done"]')`);
+  await waitFor(`!document.querySelector('.tutorial-next').disabled`);
+  await evaluate(`document.querySelector('.tutorial-next').click();document.querySelector('.tutorial-next').click()`);
+  await waitFor(`document.querySelector('.tutorial').hidden&&localStorage.getItem('naiwa-tutorial-v1-decode')==='1'`);
+  await evaluate(`document.querySelector('#tutorial-button').click()`);
+  if (!await evaluate(`document.querySelector('.tutorial').dataset.tour==='decode'&&!document.querySelector('.tutorial-next').disabled`)) throw new Error('Topbar replay should retain completed actions in this session');
+  await evaluate(`document.querySelector('.tutorial-close').click()`);
+  await evaluate(`document.querySelector('[data-tour="advanced"]').click()`);
+  await waitFor(`document.querySelector('#advanced-settings').open&&document.querySelector('.tutorial').dataset.tour==='advanced'`);
+  if (!await evaluate(`!document.querySelector('.tutorial-next').disabled`)) throw new Error('Advanced settings explanations should not require changing settings');
+  await evaluate(`document.querySelector('.tutorial-next').click()`);
+  await evaluate(`document.querySelector('.tutorial-next').click()`);
+  if (!await evaluate(`document.querySelector('.tutorial').dataset.step==='2'&&!document.querySelector('.tutorial-next').disabled`)) throw new Error('Manual settings explanation should be informational');
+  await command('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await screenshot('naiwa-tutorial-advanced-mobile.png');
+  await command('Emulation.clearDeviceMetricsOverride');
+  await evaluate(`document.querySelector('.tutorial-next').click()`);
+  await waitFor(`localStorage.getItem('naiwa-tutorial-v1-advanced')==='1'&&document.querySelector('.tutorial').hidden`);
+  await command('Page.reload', { ignoreCache: true });
+  await waitFor(`document.querySelectorAll('.preset-option').length===6&&!document.querySelector('#custom-preset-picker').disabled`);
+  finishedDownloads.length = 0;
+  if (!await evaluate(`document.querySelector('.tutorial').hidden`)) throw new Error('Completed tutorials returned after reload');
+  console.log('tutorial passed: only key upload and single-item actions are gated; explanation steps continue freely; section records, skip and replay passed');
+  if (process.argv.includes('--tutorial-only')) break applicationChecks;
+  for (const selector of ['#source-list .batch-remove', '#decode-list .batch-remove']) await evaluate(`document.querySelectorAll('${selector}').forEach(button=>button.click())`);
+  await evaluate(`window.scrollTo(0,0)`);
   for (const width of [320, 768]) {
     await command('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: width < 500 });
     const layout = await evaluate('({viewport:innerWidth,document:document.documentElement.scrollWidth,height:innerHeight,documentHeight:document.documentElement.scrollHeight})');
@@ -142,13 +229,29 @@ try {
   for (const [width, height] of [[641, 480], [800, 600], [1024, 768], [1440, 900], [1920, 1080]]) {
     await command('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
     const viewportFit = await evaluate(`(() => {const workbench=document.querySelector('#encode-view .workbench').getBoundingClientRect(),controls=document.querySelector('#encode-view .controls').getBoundingClientRect(),footer=document.querySelector('.site-footer').getBoundingClientRect();return {viewport:innerHeight,bodyHeight:document.body.clientHeight,bodyScroll:document.body.scrollHeight,documentWidth:document.documentElement.scrollWidth,overflowY:getComputedStyle(document.documentElement).overflowY,scrollY:window.scrollY,previewHidden:document.querySelector('#preview-area').hidden,workbenchBottom:Math.round(workbench.bottom),controlsBottom:Math.round(controls.bottom),footerTop:Math.round(footer.top)}})()`);
-    if (viewportFit.bodyScroll > viewportFit.bodyHeight + 1 || viewportFit.documentWidth > width + 1 || viewportFit.overflowY !== 'hidden' || viewportFit.scrollY !== 0 || !viewportFit.previewHidden || viewportFit.controlsBottom > viewportFit.workbenchBottom + 1 || viewportFit.workbenchBottom > viewportFit.footerTop + 1) throw new Error(`Desktop start view overflows at ${width}x${height}: ${JSON.stringify(viewportFit)}`);
+    if (viewportFit.documentWidth > width + 1 || viewportFit.overflowY !== 'auto' || viewportFit.scrollY !== 0 || !viewportFit.previewHidden || viewportFit.controlsBottom > viewportFit.workbenchBottom + 1 || viewportFit.workbenchBottom > viewportFit.footerTop + 1) throw new Error(`Desktop start view should allow global page scrolling without horizontal overflow at ${width}x${height}: ${JSON.stringify(viewportFit)}`);
   }
   if (!await evaluate(`document.querySelector('#advanced-settings').parentElement.classList.contains('basic-settings')`)) throw new Error('Advanced settings must be inside output options');
-  await evaluate(`document.querySelector('#advanced-settings').open=true`);
-  await waitFor('document.body.classList.contains("has-advanced-settings")');
-  const expandedDesktop = await evaluate(`({overflowY:getComputedStyle(document.documentElement).overflowY,documentHeight:document.documentElement.scrollHeight,viewport:innerHeight,contentHeight:document.querySelector('#advanced-settings').getBoundingClientRect().height,contentWidth:document.querySelector('#advanced-settings').getBoundingClientRect().width})`);
-  if (expandedDesktop.overflowY !== 'auto' || expandedDesktop.contentWidth < 400 || expandedDesktop.contentHeight < 300 || expandedDesktop.documentHeight <= expandedDesktop.viewport) throw new Error(`Expanded desktop settings should use the output column and page scrolling: ${JSON.stringify(expandedDesktop)}`);
+  for (const [width, height] of [[641, 480], [800, 600], [1024, 768], [1440, 900], [1920, 1080]]) {
+    await command('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+    await evaluate(`document.querySelector('#advanced-settings').open=true`);
+    await waitFor('document.body.classList.contains("has-advanced-settings")');
+    if (width === 1440) {
+      await evaluate(`document.body.style.minHeight='1400px';window.scrollTo(0,0);document.querySelector('.advanced-content').scrollTop=0`);
+      const point = await evaluate(`(() => {const box=document.querySelector('#preset-list').getBoundingClientRect();return {x:box.left+box.width/2,y:box.top+box.height/2}})()`);
+      await command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x, y: point.y });
+      await command('Input.dispatchMouseEvent', { type: 'mouseWheel', x: point.x, y: point.y, deltaX: 0, deltaY: 180 });
+      const centerWheel = await evaluate(`({scrollY:window.scrollY,htmlScroll:document.documentElement.scrollTop,bodyScroll:document.body.scrollTop,advancedScroll:document.querySelector('.advanced-content').scrollTop,documentHeight:document.documentElement.scrollHeight,viewport:innerHeight,overflow:getComputedStyle(document.documentElement).overflowY,element:document.elementFromPoint(${point.x},${point.y})?.outerHTML.slice(0,160)})`);
+      if (centerWheel.scrollY <= 0 || centerWheel.advancedScroll !== 0) throw new Error(`Mouse wheel over the center reference panel should scroll the page, not advanced settings: ${JSON.stringify(centerWheel)}`);
+      await evaluate(`document.body.style.minHeight='';window.scrollTo(0,0);document.querySelector('.advanced-content').scrollTop=0`);
+      const advancedPoint = await evaluate(`(() => {const box=document.querySelector('#advanced-settings summary').getBoundingClientRect();return {x:box.left+box.width/2,y:box.top+box.height/2}})()`);
+      await command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: advancedPoint.x, y: advancedPoint.y });
+      await command('Input.dispatchMouseEvent', { type: 'mouseWheel', x: advancedPoint.x, y: advancedPoint.y, deltaX: 0, deltaY: 180 });
+      if (!await evaluate(`document.querySelector('.advanced-content').scrollTop>0&&window.scrollY===0`)) throw new Error('Mouse wheel over advanced settings should scroll only advanced content');
+    }
+    const expandedDesktop = await evaluate(`(() => {const content=document.querySelector('.advanced-content'),controls=document.querySelector('#encode-view .controls'),frame=document.querySelector('#encode-view .workbench').getBoundingClientRect(),footer=document.querySelector('.site-footer').getBoundingClientRect();content.scrollTop=content.scrollHeight;const area=content.getBoundingClientRect(),last=document.querySelector('#download-png').getBoundingClientRect();return {overflowY:getComputedStyle(document.documentElement).overflowY,documentHeight:document.documentElement.scrollHeight,documentWidth:document.documentElement.scrollWidth,viewport:innerHeight,contentHeight:content.clientHeight,contentScrollHeight:content.scrollHeight,contentScrollTop:content.scrollTop,contentOverflow:getComputedStyle(content).overflowY,lastVisible:last.top>=area.top&&last.bottom<=area.bottom+1,controlsOverflow:getComputedStyle(controls).overflowY,controlsBottom:controls.getBoundingClientRect().bottom,frameBottom:frame.bottom,footerTop:footer.top}})()`);
+    if (expandedDesktop.overflowY !== 'auto' || expandedDesktop.documentWidth > width + 1 || expandedDesktop.contentOverflow !== 'auto' || expandedDesktop.contentScrollTop <= 0 || !expandedDesktop.lastVisible || expandedDesktop.controlsOverflow !== 'visible' || expandedDesktop.controlsBottom > expandedDesktop.frameBottom + 1 || expandedDesktop.frameBottom > expandedDesktop.footerTop + 1) throw new Error(`Advanced settings should scroll inside their content while the page remains globally scrollable at ${width}x${height}: ${JSON.stringify(expandedDesktop)}`);
+  }
   await evaluate(`document.querySelector('#advanced-settings').open=false`);
   await waitFor('!document.body.classList.contains("has-advanced-settings")');
   await command('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
@@ -301,7 +404,7 @@ try {
   await evaluate('document.querySelector("#advanced-settings").open = false');
   await waitFor('document.querySelector(".advanced-preview").hidden');
   await evaluate('document.querySelector("#balance").value=100; document.querySelector("#balance").dispatchEvent(new Event("input"))');
-     await waitFor('document.querySelector("#applied-options").textContent.includes("保留 25%") && document.querySelector("#balance-value").value === "混淆图更像预设" && document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
+     await waitFor('document.querySelector("#applied-options").textContent.includes("保留 25%") && document.querySelector("#balance-value").value === "混淆图更像参考图" && document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
    const presetPriority = await evaluate('({outline:Number(document.querySelector("#preset-score").textContent.match(/轮廓 ([0-9.]+)/)[1]),restored:Number(document.querySelector("#restore-metrics").textContent.match(/评分 · ([0-9.]+)/)[1])})');
   await evaluate('document.querySelector("#balance").value=0; document.querySelector("#balance").dispatchEvent(new Event("input"))');
    await waitFor('document.querySelector("#applied-options").textContent.includes("保留 100%") && document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
@@ -404,15 +507,31 @@ try {
   await evaluate(`document.querySelector('#auto-resize').checked=false;document.querySelector('#auto-resize').dispatchEvent(new Event('change'))`);
   await setInputFile('#source-file', [inputFile, smallPath]);
   await waitFor(`document.querySelectorAll('#source-list .batch-item').length===2 && [...document.querySelectorAll('#source-list .batch-item')].every(row=>row.dataset.status==='idle')`);
-  if (!await evaluate(`document.querySelector('#unify-settings').checked`)) throw new Error('Batch settings must default to unified');
+  if (!await evaluate(`document.querySelector('#encode-button').textContent==='生成全部混淆图（2）'&&!document.querySelector('#encode-button').disabled`)) throw new Error('An untouched batch should offer generation for every pending image');
+  if (!await evaluate(`document.querySelector('#unify-preset').checked`)) throw new Error('Preset sharing must default to enabled');
   await evaluate(`document.querySelector('#jpg-quality').value=85;document.querySelector('#jpg-quality').dispatchEvent(new Event('input'));document.querySelectorAll('#source-list .batch-select')[1].click()`);
-  if (!await evaluate(`document.querySelector('#jpg-quality').value==='85'`)) throw new Error('Unified quality did not reach every entry');
+  if (!await evaluate(`document.querySelector('#jpg-quality').value==='75'`)) throw new Error('Preset sharing leaked quality into another entry');
   await evaluate(`document.querySelector('.preset-option[data-index="1"]').click();document.querySelectorAll('#source-list .batch-select')[0].click()`);
   if (!await evaluate(`document.querySelector('.preset-option[data-index="1"]').getAttribute('aria-checked')==='true'`)) throw new Error('Unified preset did not reach every entry');
-  await evaluate(`document.querySelector('#unify-settings').checked=false;document.querySelector('#unify-settings').dispatchEvent(new Event('change'));document.querySelectorAll('#source-list .batch-select')[1].click();document.querySelector('#jpg-quality').value=80;document.querySelector('#jpg-quality').dispatchEvent(new Event('input'));document.querySelector('#tile-size').value=16;document.querySelector('#tile-size').dispatchEvent(new Event('input'));document.querySelector('.preset-option[data-index="2"]').click();document.querySelectorAll('#source-list .batch-select')[0].click()`);
+  await evaluate(`document.querySelector('#unify-preset').checked=false;document.querySelector('#unify-preset').dispatchEvent(new Event('change'));document.querySelectorAll('#source-list .batch-select')[1].click();document.querySelector('#jpg-quality').value=80;document.querySelector('#jpg-quality').dispatchEvent(new Event('input'));document.querySelector('#tile-size').value=16;document.querySelector('#tile-size').dispatchEvent(new Event('input'));document.querySelector('.preset-option[data-index="2"]').click();document.querySelectorAll('#source-list .batch-select')[0].click()`);
   if (!await evaluate(`document.querySelector('#jpg-quality').value==='85'&&document.querySelector('#tile-size').value==='8'&&document.querySelector('.preset-option[data-index="1"]').getAttribute('aria-checked')==='true'`)) throw new Error('Independent settings leaked into another entry');
+  await evaluate(`document.querySelector('#source-list .progress-ring').click()`);
+  await waitFor(`document.querySelectorAll('#source-list .batch-item[data-status="done"]').length===1&&document.querySelectorAll('#source-list .batch-item[data-status="idle"]').length===1`);
+  if (!await evaluate(`document.querySelector('#encode-button').textContent==='继续处理剩余图片（1）'&&!document.querySelector('#encode-button').disabled`)) throw new Error('A partial batch should continue only its unfinished images');
+  await command('Page.bringToFront');
+  await evaluate(`document.querySelectorAll('#source-list .progress-ring')[1].focus()`);
+  if (!await evaluate(`document.activeElement===document.querySelectorAll('#source-list .progress-ring')[1]`)) throw new Error('Progress ring cannot receive keyboard focus');
+  await command('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, text: '\r' });
+  await command('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 });
+  await waitFor(`document.querySelectorAll('#source-list .batch-item[data-status="done"]').length===2`);
+  if (!await evaluate(`document.querySelector('#encode-button').textContent==='重新生成全部混淆图（2）'&&!document.querySelector('#encode-button').disabled`)) throw new Error('A completed batch should offer full regeneration');
+  await evaluate(`window.__otherStatuses=[];window.__statusObserver=new MutationObserver(records=>records.forEach(record=>window.__otherStatuses.push(record.target.dataset.status)));window.__statusObserver.observe(document.querySelectorAll('#source-list .batch-item')[1],{attributes:true,attributeFilter:['data-status']});document.querySelector('#source-list .progress-ring').click();document.querySelector('#source-list .progress-ring').click()`);
+  await waitFor(`document.querySelectorAll('#source-list .batch-item[data-status="done"]').length===2`);
+  if (!await evaluate(`window.__statusObserver.disconnect();window.__otherStatuses.every(status=>status==='done')`)) throw new Error('Single-entry regeneration restarted a different entry');
+  await evaluate(`document.querySelectorAll('#source-list .batch-select')[0].click()`);
   await evaluate(`document.querySelector('#encode-button').click()`);
-  await waitFor(`document.querySelector('#source-list .batch-item[data-status="processing"] .progress-ring[aria-valuenow]')`);
+  if (!await evaluate(`document.querySelector('#encode-button').disabled&&document.querySelector('#encode-button').textContent==='正在处理 2/2 张'`)) throw new Error('Regenerating a completed batch should immediately show a disabled processing state');
+  await waitFor(`document.querySelector('#source-list .batch-item[data-status="processing"] .progress-ring [aria-valuenow]')`);
   await evaluate(`for(const value of [75,90]){document.querySelector('#jpg-quality').value=value;document.querySelector('#jpg-quality').dispatchEvent(new Event('input'))}`);
   await waitFor(`document.querySelectorAll('#source-list .batch-item[data-status="done"]').length===2&&document.querySelector('#output-size').dataset.quality==='90'&&document.querySelector('#result-summary').textContent.includes('还原验证通过')`);
   if (!await evaluate(`document.querySelector('#mosaic-preview').width===1280&&document.querySelector('#mosaic-preview').height===720`)) throw new Error('First batch entry has incorrect dimensions');
@@ -446,6 +565,8 @@ try {
   for (const item of encodedArchive) if (!item.data.equals(await readFile(join(downloads, item.name)))) throw new Error('ZIP content differs from per-entry JPG');
   await setInputFile('#encoded-file', [join(downloads, 'test-photo-obfuscated-q90.jpg'), join(downloads, 'small-source-obfuscated-q80.jpg'), inputFile]);
   await waitFor(`document.querySelectorAll('#decode-list .batch-item[data-status="idle"]').length===3`);
+  await evaluate(`document.querySelector('[data-view="decode"]').click();document.querySelector('#decode-list .progress-ring').click()`);
+  await waitFor(`document.querySelectorAll('#decode-list .batch-item[data-status="done"]').length===1&&document.querySelectorAll('#decode-list .batch-item[data-status="idle"]').length===2`);
   await evaluate(`document.querySelector('[data-view="decode"]').click();document.querySelector('#decode-button').click()`);
   await waitFor(`document.querySelectorAll('#decode-list .batch-item[data-status="done"]').length===2&&document.querySelectorAll('#decode-list .batch-item[data-status="error"]').length===1`);
   await evaluate(`document.querySelectorAll('#decode-list .batch-select')[0].click()`);
@@ -468,16 +589,23 @@ try {
   await command('Emulation.clearDeviceMetricsOverride');
   await evaluate(`document.querySelector('[data-view="encode"]').click();document.querySelector('#encode-button').click();document.querySelectorAll('#source-list .batch-remove')[1].click()`);
   await waitFor(`document.querySelectorAll('#source-list .batch-item').length===1&&document.querySelector('#source-list .batch-item').dataset.status==='done'`);
-  await evaluate(`document.querySelector('#unify-settings').checked=true;document.querySelector('#unify-settings').dispatchEvent(new Event('change'))`);
+  await evaluate(`document.querySelector('#unify-preset').checked=true;document.querySelector('#unify-preset').dispatchEvent(new Event('change'))`);
   await setInputFile('#source-file', smallPath, true);
   await waitFor(`document.querySelectorAll('#source-list .batch-item[data-status="idle"]').length===1`);
   await evaluate(`document.querySelectorAll('#source-list .batch-select')[1].click()`);
   if (!await evaluate(`document.querySelector('#jpg-quality').value==='90'&&document.querySelector('#tile-size').value==='8'`)) throw new Error('New entry did not inherit unified settings');
   await evaluate(`document.querySelectorAll('#source-list .batch-select')[0].click();document.querySelector('#jpg-quality').value=88;document.querySelector('#jpg-quality').dispatchEvent(new Event('input'));document.querySelectorAll('#source-list .batch-select')[1].click()`);
-  if (!await evaluate(`document.querySelector('#jpg-quality').value==='88'`)) throw new Error('Re-enabling unified settings did not synchronize the batch');
+  if (!await evaluate(`document.querySelector('#jpg-quality').value==='90'`)) throw new Error('Re-enabling preset sharing synchronized unrelated quality settings');
   await evaluate(`document.querySelectorAll('#source-list .batch-remove').forEach(button=>button.click());document.querySelectorAll('#decode-list .batch-remove').forEach(button=>button.click())`);
   if (!await evaluate(`document.querySelector('#encode-button').disabled&&document.querySelector('#decode-button').disabled&&document.querySelector('#preview-area').hidden`)) throw new Error('Removing the final batch entry did not reset the view');
-  console.log('batch passed: unified/independent presets and settings, cancellation, progress, previews, single downloads, JPG/PNG ZIPs, partial failure and 320/390/768px layouts');
+  const unreadablePath = join(temporaryRoot, 'unreadable-source.png');
+  await writeFile(unreadablePath, Buffer.from('not an image'));
+  await setInputFile('#source-file', [inputFile, unreadablePath]);
+  await waitFor(`document.querySelectorAll('#source-list .batch-item').length===2&&document.querySelectorAll('#source-list .batch-item[data-status="idle"]').length===1&&document.querySelectorAll('#source-list .batch-item[data-status="error"]').length===1`);
+  await evaluate(`document.querySelector('#source-list .batch-item[data-status="idle"] .progress-ring').click()`);
+  await waitFor(`document.querySelector('#source-list .batch-item[data-status="done"]')`);
+  if (!await evaluate(`document.querySelector('#encode-button').textContent==='重新生成全部混淆图（1）'&&!document.querySelector('#encode-button').disabled`)) throw new Error('An unreadable image should not block regeneration of the loaded batch items');
+  console.log('batch passed: shared presets, independent settings, single encode/decode and keyboard processing, cancellation, progress, downloads, ZIPs, partial failure and 320/390/768px layouts');
 
   const gifInput = fileURLToPath(new URL('./fixtures/animated/2.gif', import.meta.url));
   const gifOriginal = await readFile(gifInput); const beforeGifDownload = finishedDownloads.length;
@@ -517,7 +645,9 @@ try {
     const inputBytes = await readFile(inputPath); const sourceGif = parseGif(inputBytes); const beforeDownload = finishedDownloads.length;
     await setInputFile('#source-file', inputPath);
     await waitFor(`document.querySelector('#source-list .batch-item')?.dataset.status==='idle'&&document.querySelector('#source-meta').textContent.includes('${sample}')`);
-    await evaluate(`document.querySelector('.preset-option[data-index="${preset}"]').click();document.querySelector('#encode-button').click()`);
+    // Keep the existing file-budget benchmark at 8px explicitly. New entries
+    // now correctly choose their own defaults instead of inheriting overrides.
+    await evaluate(`document.querySelector('#tile-size').value=8;document.querySelector('#tile-size').dispatchEvent(new Event('input'));document.querySelector('.preset-option[data-index="${preset}"]').click();document.querySelector('#encode-button').click()`);
     await waitFor(`document.querySelector('#result-summary').textContent.includes('原图可完整还原')`, 240000);
     const resultMetrics = await evaluate(`({preset:document.querySelector('#preset-score').textContent,bytes:Number(document.querySelector('#output-size').dataset.bytes),frames:Number(document.querySelector('#result-summary').textContent.match(/GIF (\\d+) 帧/)[1])})`);
     await evaluate(`document.querySelector('#download-button').click()`);
@@ -587,6 +717,16 @@ try {
   await setInputFile('#source-file', gifInput);
   const gifSourceDefaults = await waitFor(`document.querySelector('#source-meta').textContent.includes('2.gif') && document.querySelector('#balance').value === '100' && document.querySelector('#tile-size').value === '2'`);
   if (!gifSourceDefaults) throw new Error('GIF source with a static preset must default to 2px / preset-focused');
+  await setInputFile('#source-file', [inputFile, gifInput]);
+  await waitFor(`document.querySelectorAll('#source-list .batch-item[data-status="idle"]').length===2`);
+  const mixedDefaults = await evaluate(`(() => {const result=[];for(const button of document.querySelectorAll('#source-list .batch-select')){button.click();result.push([document.querySelector('#balance').value,document.querySelector('#tile-size').value])}return result})()`);
+  if (JSON.stringify(mixedDefaults) !== JSON.stringify([['50', '8'], ['100', '2']])) throw new Error(`Mixed batch overwrote scene defaults: ${JSON.stringify(mixedDefaults)}`);
+  await evaluate(`document.querySelector('.preset-option[data-index="4"]').click();document.querySelectorAll('#source-list .batch-select')[0].click()`);
+  if (!await evaluate(`document.querySelector('#balance').value==='100'&&document.querySelector('#tile-size').value==='2'`)) throw new Error('Shared animated preset did not apply the animated scene defaults');
+  await evaluate(`document.querySelector('#tile-size').value=4;document.querySelector('#tile-size').dispatchEvent(new Event('input'));document.querySelector('.preset-option[data-index="0"]').click();document.querySelectorAll('#source-list .batch-select')[1].click()`);
+  if (!await evaluate(`document.querySelector('#balance').value==='100'&&document.querySelector('#tile-size').value==='2'`)) throw new Error('Shared static preset lost GIF defaults or leaked manual parameters');
+  await evaluate(`document.querySelectorAll('#source-list .batch-select')[0].click()`);
+  if (!await evaluate(`document.querySelector('#balance').value==='50'&&document.querySelector('#tile-size').value==='4'`)) throw new Error('Preset change lost the current entry manual override');
   if (pageErrors.length) throw new Error(`Browser runtime errors: ${pageErrors.join(' | ')}`);
 
   console.log(`browser smoke passed: ${encodedSummary}; ${restoredMessage}; zoom=${JSON.stringify(zoomBehavior)}; profiles=${profile}`);
