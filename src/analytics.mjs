@@ -42,6 +42,8 @@ function displayCount(element, value) {
 export function initializeAnalytics() {
   const visitorCount = $('#visitor-count');
   const conversionCount = $('#conversion-count');
+  const phantomCount = $('#phantom-count');
+  const countElements = [visitorCount, conversionCount, phantomCount];
   const dialog = $('#policy-dialog');
   const toggle = $('#analytics-toggle');
   const preference = getPreference();
@@ -54,10 +56,10 @@ export function initializeAnalytics() {
     $('#analytics-toggle-state').textContent = enabled ? '已开启' : '已关闭';
   };
 
-  const updateCounts = data => {
+  const updateCounts = (data, operationCount) => {
     if (!enabled) return;
     displayCount(visitorCount, data.site_uv);
-    displayCount(conversionCount, data.page_pv);
+    if (operationCount) displayCount(operationCount, data.page_pv);
   };
 
   async function requestCounts(referer, method) {
@@ -76,23 +78,23 @@ export function initializeAnalytics() {
     return result.data;
   }
 
-  async function refreshCounts() {
-    const visitData = await requestCounts(location.href, 'POST');
-    if (!enabled) return;
-    updateCounts(visitData);
-    const conversionData = await requestCounts(new URL('/__naiwa_conversion__', location.origin).href, 'GET');
-    updateCounts(conversionData);
+  function refreshCounts() {
+    return Promise.all([
+      enqueue(async () => updateCounts(await requestCounts(location.href, 'POST')), [visitorCount]),
+      enqueue(async () => updateCounts(await requestCounts(new URL('/__naiwa_conversion__', location.origin).href, 'GET'), conversionCount), [conversionCount]),
+      enqueue(async () => updateCounts(await requestCounts(new URL('/__naiwa_phantom__', location.origin).href, 'GET'), phantomCount), [phantomCount]),
+    ]);
   }
 
-  function enqueue(taskAction) {
+  function enqueue(taskAction, affectedElements) {
     const task = requestQueue.then(() => enabled ? taskAction() : undefined);
     requestQueue = task.catch(() => {});
     return task.catch(() => {
       if (enabled) {
-        visitorCount.textContent = '—';
-        conversionCount.textContent = '—';
-        visitorCount.title = '统计服务暂不可用';
-        conversionCount.title = '统计服务暂不可用';
+        for (const element of affectedElements) {
+          element.textContent = '—';
+          element.title = '统计服务暂不可用';
+        }
       }
     });
   }
@@ -103,12 +105,10 @@ export function initializeAnalytics() {
     savePreference(next ? 'enabled' : 'disabled');
     if (!next) {
       writeCookie('', 0);
-      visitorCount.textContent = '关闭';
-      conversionCount.textContent = '关闭';
+      countElements.forEach(element => { element.textContent = '关闭'; });
     } else {
-      visitorCount.textContent = '…';
-      conversionCount.textContent = '…';
-      const request = enqueue(refreshCounts);
+      countElements.forEach(element => { element.textContent = '…'; });
+      const request = refreshCounts();
       updateToggle();
       return request;
     }
@@ -127,10 +127,9 @@ export function initializeAnalytics() {
   dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
   toggle.addEventListener('change', () => setEnabled(toggle.checked));
 
-  const ready = enabled ? enqueue(refreshCounts) : Promise.resolve();
+  const ready = enabled ? refreshCounts() : Promise.resolve();
   if (!enabled) {
-    visitorCount.textContent = '关闭';
-    conversionCount.textContent = '关闭';
+    countElements.forEach(element => { element.textContent = '关闭'; });
   }
   updateToggle();
 
@@ -139,7 +138,12 @@ export function initializeAnalytics() {
     recordConversion() {
       if (!enabled) return;
       const conversionPage = new URL('/__naiwa_conversion__', location.origin).href;
-      return enqueue(async () => updateCounts(await requestCounts(conversionPage, 'POST')));
+      return enqueue(async () => updateCounts(await requestCounts(conversionPage, 'POST'), conversionCount), [conversionCount]);
+    },
+    recordPhantom() {
+      if (!enabled) return;
+      const phantomPage = new URL('/__naiwa_phantom__', location.origin).href;
+      return enqueue(async () => updateCounts(await requestCounts(phantomPage, 'POST'), phantomCount), [phantomCount]);
     },
   };
 }

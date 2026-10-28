@@ -19,7 +19,7 @@
         <div class="local-badge"><span class="status-dot"></span> 本地处理所有文件</div>
         <div class="site-stats" aria-label="网站统计" aria-live="polite">
           <span>总访客数 <strong id="visitor-count">—</strong></span>
-          <span>总转图次数 <strong id="conversion-count">—</strong></span>
+          <span>总混淆次数 <strong id="conversion-count">—</strong></span>
         </div>
       </div>
     </header>
@@ -219,7 +219,10 @@
       <section id="phantom-view" class="view" aria-labelledby="phantom-title" hidden>
         <div class="workspace-heading">
           <div>
-            <h1 id="phantom-title">生成幻影坦克图</h1>
+            <div class="phantom-title-line">
+              <h1 id="phantom-title">生成幻影坦克图</h1>
+              <span class="phantom-stats" aria-live="polite">召唤幻影坦克数量 <strong id="phantom-count">—</strong></span>
+            </div>
             <p class="workspace-intro">选外图、内图与成像模式后生成图片并下载；开灯显示白底外图，关灯显示黑底内图。</p>
           </div>
           <div class="segmented phantom-page-tabs" role="group" aria-label="幻影坦克功能">
@@ -375,11 +378,11 @@
       </article>
       <article class="policy-copy" id="privacy-copy" hidden>
         <p><strong>图片处理：</strong>你选择的原图和生成结果只在当前浏览器中处理，不会上传到任何地方。你添加的自定义参考图会保存在本机浏览器的存储中；你可以手动删除这些参考图，或者直接以清空网站数据的方式来移除。</p>
-        <p><strong>访客统计：</strong>统计默认开启。页面向 <code>bsz.iirose.cn</code> 统计接口发送访客请求，并在每次成功图片处理（混淆或还原）后记录一次转图。本站使用第一方 Cookie 保存访客标识（最长一年），供统计服务去重。请求会包含页面地址及网络连接信息（例如 IP 地址和浏览器 User-Agent）；不会发送图片内容。此服务是第三方不蒜子兼容实现，并非原版官方服务。<a href="https://busuanzi.9420.ltd/usage.html" target="_blank" rel="noopener noreferrer">查看兼容服务说明</a>（服务方说明不提供 SLA）。</p>
+        <p><strong>访客统计：</strong>统计默认开启。页面向 <code>bsz.iirose.cn</code> 统计接口发送访客请求，原有混淆或还原任务完成后更新“总混淆次数”；每次成功生成幻影坦克后，单独更新“召唤幻影坦克数量”。刷新页面仅读取这两项累计数量。本站使用第一方 Cookie 保存访客标识（最长一年），供统计服务去重。请求会包含页面地址及网络连接信息（例如 IP 地址和浏览器 User-Agent）；不会发送图片内容。此服务是第三方不蒜子兼容实现，并非原版官方服务。<a href="https://busuanzi.9420.ltd/usage.html" target="_blank" rel="noopener noreferrer">查看兼容服务说明</a>（服务方说明不提供 SLA）。</p>
         <p>你可以使用下方开关关闭统计；关闭后停止发送新请求并删除本站保存的访客 Cookie，不影响服务方此前收到的数据。</p>
         <label class="policy-analytics-toggle" for="analytics-toggle">
-          <span>访客与转图次数统计</span>
-          <input id="analytics-toggle" type="checkbox" role="switch" aria-label="启用访客与转图统计" aria-checked="true" checked>
+          <span>访客与图片生成次数统计</span>
+          <input id="analytics-toggle" type="checkbox" role="switch" aria-label="启用访客与图片生成次数统计" aria-checked="true" checked>
           <span id="analytics-toggle-state">已开启</span>
         </label>
       </article>

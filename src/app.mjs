@@ -93,6 +93,7 @@ const phantomTank = initializePhantomTank({
   getPresets: () => PRESETS.map((preset, index) => ({ key: presetKey(preset), name: preset.name, src: preset.displaySrc ?? preset.src,
     image: state.presetImages[index], remove: preset.filename ? () => removeCustomPreset(preset) : null })).filter(choice => choice.image),
   onError: error => showToast(error.message, true),
+  onGenerated: () => analytics.recordPhantom(),
   onPreviewChange: action => requestAnimationFrame(() => action === 'create' ? previews.fit('#phantom-create-view .phantom-stage')
     : action === 'reveal' ? previews.fit('#phantom-reveal-view .phantom-stage') : previews.apply()),
 });

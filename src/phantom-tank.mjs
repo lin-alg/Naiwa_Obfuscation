@@ -163,7 +163,7 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
-export function initializePhantomTank({ getPresets, onError = () => {}, onPreviewChange = () => {} }) {
+export function initializePhantomTank({ getPresets, onError = () => {}, onPreviewChange = () => {}, onGenerated = () => {} }) {
   const $ = selector => document.querySelector(selector);
   const elements = {
     outerFile: $('#phantom-outer-file'), outerPicker: $('#phantom-outer-picker'), outerName: $('#phantom-outer-name'),
@@ -300,6 +300,7 @@ export function initializePhantomTank({ getPresets, onError = () => {}, onPrevie
       elements.status.textContent = `生成完成 · ${result.width} × ${result.height} · ${(blob.size / 1024).toFixed(0)} KB`;
       elements.resultFooter.classList.add('is-ready');
       elements.resultMessage.textContent = `原图保真度 · 白底外图 ${outerSSIM.toFixed(3)} · 黑底内图 ${innerSSIM.toFixed(3)}`;
+      onGenerated();
     } catch (error) {
       onError(error);
       elements.status.textContent = error.message;
