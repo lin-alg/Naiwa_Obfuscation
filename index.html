@@ -27,6 +27,7 @@
     <nav class="tabs" aria-label="工作区">
       <button class="tab is-active" data-view="encode" type="button">混淆图像</button>
       <button class="tab" data-view="decode" type="button">还原图像</button>
+      <button class="tab" data-view="phantom" type="button">生成幻影坦克图</button>
       <button class="tab" data-view="join" type="button">加入奶蛙研究所</button>
     </nav>
 
@@ -213,6 +214,121 @@
             </figure>
           </section>
         </div>
+      </section>
+
+      <section id="phantom-view" class="view" aria-labelledby="phantom-title" hidden>
+        <div class="workspace-heading">
+          <div>
+            <h1 id="phantom-title">生成幻影坦克图</h1>
+            <p class="workspace-intro">选外图、内图与成像模式后生成图片并下载；开灯显示白底外图，关灯显示黑底内图。</p>
+          </div>
+          <div class="segmented phantom-page-tabs" role="group" aria-label="幻影坦克功能">
+            <button class="preview-choice is-active" data-phantom-page="create" type="button" aria-pressed="true">制作</button>
+            <button class="preview-choice" data-phantom-page="reveal" type="button" aria-pressed="false">显形</button>
+          </div>
+        </div>
+        <div class="phantom-layout" id="phantom-create-view">
+          <aside class="controls phantom-controls">
+            <section class="control-section phantom-outer-section">
+              <div class="section-heading"><span class="step-index">01</span><h2>外图</h2></div>
+              <input id="phantom-outer-file" class="visually-hidden" type="file" accept="image/*">
+              <button class="upload-zone" id="phantom-outer-picker" type="button">
+                <span class="upload-plus" aria-hidden="true">+</span>
+                <span class="upload-copy"><strong id="phantom-outer-name">选择外图</strong><small>白色背景下显示的是外图</small></span>
+              </button>
+              <div class="phantom-image-chip" id="phantom-outer-chip" hidden>
+                <img id="phantom-outer-thumb" alt="">
+                <span id="phantom-outer-meta"></span>
+              </div>
+            </section>
+            <section class="control-section phantom-inner-section">
+              <div class="section-heading"><span class="step-index">02</span><h2>内图</h2></div>
+              <div class="phantom-presets" id="phantom-presets" role="group" aria-label="选择内图"></div>
+              <input id="phantom-inner-file" class="visually-hidden" type="file" accept="image/*">
+              <button class="quiet-button wide-button" id="phantom-inner-picker" type="button">＋ 上传自己的内图</button>
+            </section>
+            <details class="phantom-advanced">
+              <summary>高级设置 · 手动亮度与对比度</summary>
+              <p class="field-hint">建议调暗内图，调亮外图，以获得更好的视觉效果。</p>
+              <section class="control-section phantom-adjustments">
+                <div class="phantom-adjust-group">
+                  <h3>外图 <span>白底显示</span></h3>
+                  <label for="phantom-outer-contrast">对比度 <output id="phantom-outer-contrast-value">50</output></label>
+                  <div class="phantom-range-line"><input id="phantom-outer-contrast" type="range" min="0" max="100" value="50"><button class="phantom-reset" type="button" data-phantom-reset="outerContrast" aria-label="重置外图对比度" title="重置外图对比度">↺</button></div>
+                  <label for="phantom-outer-brightness">亮度 <output id="phantom-outer-brightness-value">50</output></label>
+                  <div class="phantom-range-line"><input id="phantom-outer-brightness" type="range" min="0" max="100" value="50"><button class="phantom-reset" type="button" data-phantom-reset="outerBrightness" aria-label="重置外图亮度" title="重置外图亮度">↺</button></div>
+                </div>
+                <div class="phantom-adjust-group">
+                  <h3>内图 <span>黑底显示</span></h3>
+                  <label for="phantom-inner-contrast">对比度 <output id="phantom-inner-contrast-value">50</output></label>
+                  <div class="phantom-range-line"><input id="phantom-inner-contrast" type="range" min="0" max="100" value="50"><button class="phantom-reset" type="button" data-phantom-reset="innerContrast" aria-label="重置内图对比度" title="重置内图对比度">↺</button></div>
+                  <label for="phantom-inner-brightness">亮度 <output id="phantom-inner-brightness-value">50</output></label>
+                  <div class="phantom-range-line"><input id="phantom-inner-brightness" type="range" min="0" max="100" value="50"><button class="phantom-reset" type="button" data-phantom-reset="innerBrightness" aria-label="重置内图亮度" title="重置内图亮度">↺</button></div>
+                </div>
+              </section>
+            </details>
+            <section class="control-section phantom-mode-section">
+              <div class="section-heading"><span class="step-index">03</span><h2>成像模式（黑白效果更好）</h2></div>
+              <div class="segmented phantom-mode" role="group" aria-label="幻影坦克成像模式">
+                <button class="preview-choice is-active" data-phantom-mode="mono" type="button" aria-pressed="true">黑白</button>
+                <button class="preview-choice" data-phantom-mode="color" type="button" aria-pressed="false">彩色</button>
+              </div>
+            </section>
+            <div class="phantom-actions">
+              <button class="primary-button" id="phantom-generate" type="button" disabled>生成幻影坦克图</button>
+              <button class="quiet-button wide-button" id="phantom-download" type="button" disabled>下载生成的图片</button>
+              <p class="field-hint" id="phantom-status" role="status" aria-live="polite">选择外图和内图后即可生成。</p>
+            </div>
+          </aside>
+          <section class="phantom-result" aria-label="幻影坦克预览">
+            <div class="phantom-toolbar">
+              <div><strong>成品预览</strong><span id="phantom-output-meta">等待生成</span></div>
+              <div class="zoom-controls phantom-zoom" role="group" aria-label="幻影坦克预览缩放">
+                <button class="zoom-button" data-zoom="out" type="button" title="缩小预览" aria-label="缩小预览">−</button>
+                <button class="zoom-button zoom-fit" data-zoom="fit" type="button" title="适应预览框">适应</button>
+                <button class="zoom-button zoom-one" data-zoom="one" type="button" title="按原始比例显示">1:1</button>
+                <button class="zoom-button" data-zoom="in" type="button" title="放大预览" aria-label="放大预览">+</button>
+                <output class="zoom-readout" id="phantom-zoom-value">适应</output>
+              </div>
+              <label class="light-switch">
+                <span>灯光预览</span>
+                <input id="phantom-light" type="checkbox" role="switch" aria-label="开灯显示白底外图" checked>
+                <span class="light-switch-state" id="phantom-light-state">开灯</span>
+              </label>
+            </div>
+            <div class="phantom-stage" id="phantom-stage" data-light="on">
+              <div class="canvas-viewport"><div class="canvas-stage"><canvas id="phantom-canvas" aria-label="幻影坦克图预览"></canvas></div></div>
+              <div class="empty-state" id="phantom-empty"><strong>幻影坦克将在这里出现</strong><span>开灯看白底外图，关灯看黑底内图</span></div>
+            </div>
+            <div class="phantom-result-footer"><span class="result-indicator"></span><span id="phantom-result-message" aria-live="polite">尚未生成</span></div>
+          </section>
+        </div>
+        <section class="phantom-reveal" id="phantom-reveal-view" hidden>
+          <div class="phantom-reveal-toolbar">
+            <div>
+              <input id="phantom-reveal-file" class="visually-hidden" type="file" accept="image/*">
+              <button class="quiet-button" id="phantom-reveal-picker" type="button">选择幻影坦克图</button>
+              <span id="phantom-reveal-name">PNG、WebP 等透明图片</span>
+            </div>
+            <div class="zoom-controls phantom-zoom" role="group" aria-label="显形预览缩放">
+              <button class="zoom-button" data-zoom="out" type="button" title="缩小预览" aria-label="缩小预览">−</button>
+              <button class="zoom-button zoom-fit" data-zoom="fit" type="button" title="适应预览框">适应</button>
+              <button class="zoom-button zoom-one" data-zoom="one" type="button" title="按原始比例显示">1:1</button>
+              <button class="zoom-button" data-zoom="in" type="button" title="放大预览" aria-label="放大预览">+</button>
+              <output class="zoom-readout" id="phantom-reveal-zoom-value">适应</output>
+            </div>
+            <label class="light-switch">
+              <span>灯光预览</span>
+              <input id="phantom-reveal-light" type="checkbox" role="switch" aria-label="开灯显示白底外图" checked>
+              <span class="light-switch-state" id="phantom-reveal-light-state">开灯</span>
+            </label>
+          </div>
+          <div class="phantom-stage phantom-reveal-stage" id="phantom-reveal-stage" data-light="on">
+            <div class="canvas-viewport"><div class="canvas-stage"><canvas id="phantom-reveal-canvas" aria-label="已有幻影坦克显形预览"></canvas></div></div>
+            <div class="empty-state" id="phantom-reveal-empty"><strong>上传已有幻影坦克图</strong><span>开灯看白底外图，关灯看黑底内图</span></div>
+          </div>
+          <p class="field-hint" id="phantom-reveal-status" role="status" aria-live="polite">透明 PNG 保留透明通道时，显形效果最佳。</p>
+        </section>
       </section>
 
       <section id="join-view" class="view" aria-labelledby="join-title" hidden>

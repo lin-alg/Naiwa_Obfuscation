@@ -18,9 +18,10 @@ node tests/selftest.mjs
 node tests/gif-selftest.mjs
 node tests/compatibility.mjs
 node tests/zip-selftest.mjs
+node tests/phantom-tank-selftest.mjs
 ```
 
-`browser-smoke.mjs` 覆盖新手引导及其本地记录、参考图共享与独立参数、圆环单张处理、图片生成与还原、预览、下载、参考图、GIF、ZIP 和响应式布局。追加 `--tutorial-only` 可只验证新手引导；追加 `--background` 可后台运行；追加 `--reports` 会检查交互式评测页面。
+`browser-smoke.mjs` 覆盖新手引导及其本地记录、参考图共享与独立参数、圆环单张处理、图片生成与还原、预览、下载、参考图、GIF、ZIP 和响应式布局。追加 `--tutorial-only` 可只验证新手引导；追加 `--phantom-only` 可验证两种 Mirage_Cloak 幻影公式、默认黑白模式与原图双背景 SSIM、手动调整、自定义参考图删除与共享删除撤销、六张内置图片的 IndexedDB 缓存及禁止图片网络请求后的再次加载、预览缩放/适应/平移、制作与显形选中态、透明图显形及响应式布局；追加 `--background` 可后台运行；追加 `--reports` 会检查交互式评测页面。
 
 ```powershell
 node tests/browser-smoke.mjs

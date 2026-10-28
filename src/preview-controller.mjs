@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 export function initializePreviews() {
   const $ = selector => document.querySelector(selector);
+  const panelSelector = '.preview-panel, .phantom-result, .phantom-reveal';
   let mode = 'compare'; let activeViewport = null; let zooms = new WeakMap();
   const zoomState = viewport => {
     if (!viewport) return { factor: null };
@@ -19,13 +20,15 @@ export function initializePreviews() {
   }
   function readout(viewport) {
     if (!viewport) return;
-    const factor = zoomState(viewport).factor ?? fitScale(viewport.closest('.preview-panel'));
-    const output = viewport.closest('.decode-preview') ? $('#decode-zoom-value') : $('#zoom-value');
+    const factor = zoomState(viewport).factor ?? fitScale(viewport.closest(panelSelector));
+    const localReadout = viewport.closest('.phantom-result, .phantom-reveal')?.querySelector('.zoom-readout');
+    const output = viewport.closest('.decode-preview') ? $('#decode-zoom-value') : localReadout ?? $('#zoom-value');
     if (output) output.textContent = `${Math.round(factor * 100)}%`;
   }
   function apply(target = null, anchor = null) {
-    const panels = target ? [target.closest('.preview-panel')].filter(Boolean)
-      : [...document.querySelectorAll('.preview-panel')].filter(panel => panel.getClientRects().length && !panel.hidden && getComputedStyle(panel).display !== 'none');
+    const targetPanel = target?.matches?.(panelSelector) ? target : target?.closest?.(panelSelector);
+    const panels = target ? [targetPanel].filter(Boolean)
+      : [...document.querySelectorAll(panelSelector)].filter(panel => panel.getClientRects().length && !panel.hidden && getComputedStyle(panel).display !== 'none');
     for (const panel of panels) {
       const viewport = panel.querySelector('.canvas-viewport'); const image = visual(viewport); const stage = panel.querySelector('.canvas-stage'); const size = dimensions(image);
       if (!size.width || !size.height || !viewport || !stage) continue;
@@ -34,6 +37,7 @@ export function initializePreviews() {
       image.style.width = `${width}px`; image.style.height = `${height}px`;
       stage.style.width = `${Math.max(viewport.clientWidth, width)}px`; stage.style.height = `${Math.max(viewport.clientHeight, height)}px`;
       viewport.style.touchAction = scale > fit * 1.001 ? 'none' : 'pan-y';
+      if (panel.matches('.phantom-result, .phantom-reveal')) readout(viewport);
     }
     if (anchor) {
       const { viewport, image, x, y, imageX, imageY } = anchor; const size = dimensions(image);
@@ -50,7 +54,7 @@ export function initializePreviews() {
     }
   }
   function change(direction, viewport, clientX, clientY) {
-    const panel = viewport?.closest('.preview-panel'); const image = visual(viewport); const size = dimensions(image);
+    const panel = viewport?.closest(panelSelector); const image = visual(viewport); const size = dimensions(image);
     if (!panel || !size.width || !viewport.clientWidth || !viewport.clientHeight) return;
     if (!viewport.closest('.decode-preview')) activeViewport = viewport;
     const view = viewport.getBoundingClientRect(); const rect = image.getBoundingClientRect(); const scale = rect.width / size.width;
@@ -63,12 +67,14 @@ export function initializePreviews() {
   }
   function setMode(value) {
     mode = value;
-    document.querySelectorAll('.preview-choice').forEach(button => button.classList.toggle('is-active', button.dataset.preview === mode));
+    document.querySelectorAll('[data-preview]').forEach(button => button.classList.toggle('is-active', button.dataset.preview === mode));
     $('#preview-grid').dataset.mode = mode; activeViewport = modeViewport(); requestAnimationFrame(() => apply());
   }
-  document.querySelectorAll('.preview-choice').forEach(button => button.addEventListener('click', () => setMode(button.dataset.preview)));
+  document.querySelectorAll('[data-preview]').forEach(button => button.addEventListener('click', () => setMode(button.dataset.preview)));
   document.querySelectorAll('[data-zoom]').forEach(button => button.addEventListener('click', () => {
-    const viewport = button.closest('.decode-preview') ? $('#decode-preview').closest('.canvas-viewport') : activeViewport?.getClientRects().length ? activeViewport : modeViewport();
+    const localViewport = button.closest(panelSelector)?.querySelector('.canvas-viewport');
+    const viewport = button.closest('.decode-preview') ? $('#decode-preview').closest('.canvas-viewport')
+      : localViewport ?? (activeViewport?.getClientRects().length ? activeViewport : modeViewport());
     if (['in', 'out'].includes(button.dataset.zoom)) { change(button.dataset.zoom === 'in' ? 1 : -1, viewport); return; }
     zoomState(viewport).factor = button.dataset.zoom === 'fit' ? null : 1;
     viewport.scrollLeft = viewport.scrollTop = 0;
@@ -85,7 +91,7 @@ export function initializePreviews() {
     viewport.addEventListener('pointerdown', event => {
       if (event.button !== 0 || !dimensions(visual(viewport)).width) return;
       if (event.pointerType === 'touch') {
-        const panel = viewport.closest('.preview-panel'); const fit = fitScale(panel);
+        const panel = viewport.closest(panelSelector); const fit = fitScale(panel);
         if ((zoomState(viewport).factor ?? fit) <= fit * 1.001) return;
       }
       drag = { id: event.pointerId, x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
@@ -100,7 +106,18 @@ export function initializePreviews() {
   });
   window.addEventListener('resize', () => apply());
   if ('ResizeObserver' in window) {
-    const observer = new ResizeObserver(() => apply()); observer.observe($('#preview-area')); observer.observe($('.decode-preview'));
+    const observer = new ResizeObserver(() => apply());
+    observer.observe($('#preview-area')); observer.observe($('.decode-preview'));
+    observer.observe($('.phantom-result')); observer.observe($('.phantom-reveal'));
   }
-  return { apply, setMode, reset: () => { zooms = new WeakMap(); activeViewport = null; } };
+  function fit(target) {
+    const element = typeof target === 'string' ? $(target) : target;
+    const panel = element?.matches?.(panelSelector) ? element : element?.closest?.(panelSelector);
+    const viewport = element?.matches?.('.canvas-viewport') ? element : panel?.querySelector('.canvas-viewport');
+    if (!viewport) return;
+    zoomState(viewport).factor = null;
+    viewport.scrollLeft = viewport.scrollTop = 0;
+    apply(viewport);
+  }
+  return { apply, fit, setMode, reset: () => { zooms = new WeakMap(); activeViewport = null; } };
 }

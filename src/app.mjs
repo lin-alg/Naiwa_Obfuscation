@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { createPlan } from './core.mjs';
 import { carrierScale, conversionDefaults, processingSize, processingOptions } from './processing-settings.mjs';
-import { listPresets, savePreset, deletePreset, selectedPreset } from './preset-store.mjs';
+import { listPresets, savePreset, deletePreset, selectedPreset, loadBuiltinPreset } from './preset-store.mjs';
 import { WorkerPool } from './worker-pool.mjs';
 import { initializePreviews } from './preview-controller.mjs';
 import { zipFiles } from './zip-store.mjs';
 import { isGif } from './gif-codec.mjs';
 import { initializeTutorial } from './guided-tour.mjs';
 import { initializeAnalytics } from './analytics.mjs';
+import { initializePhantomTank } from './phantom-tank.mjs';
 
 const $ = selector => document.querySelector(selector);
 const PRESETS = [
@@ -87,6 +88,14 @@ function showToast(message, isError = false, action) {
   toast.classList.toggle('is-error', isError); toast.classList.add('is-visible'); clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => toast.classList.remove('is-visible'), action ? 8000 : 3800);
 }
+
+const phantomTank = initializePhantomTank({
+  getPresets: () => PRESETS.map((preset, index) => ({ key: presetKey(preset), name: preset.name, src: preset.displaySrc ?? preset.src,
+    image: state.presetImages[index], remove: preset.filename ? () => removeCustomPreset(preset) : null })).filter(choice => choice.image),
+  onError: error => showToast(error.message, true),
+  onPreviewChange: action => requestAnimationFrame(() => action === 'create' ? previews.fit('#phantom-create-view .phantom-stage')
+    : action === 'reveal' ? previews.fit('#phantom-reveal-view .phantom-stage') : previews.apply()),
+});
 
 const formatBytes = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(2)} MB` : bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
 const stem = entry => entry.file.name.replace(/\.[^.]+$/, '') || 'image';
@@ -526,7 +535,7 @@ function appendPreset(preset, index) {
   const card = document.createElement('div'); card.className = 'preset-card';
   const option = document.createElement('button'); option.className = 'preset-option'; option.type = 'button'; option.dataset.index = String(index);
   option.setAttribute('role', 'radio'); option.setAttribute('aria-checked', 'false'); option.setAttribute('aria-label', preset.name); option.title = preset.name;
-  const image = document.createElement('img'); image.src = preset.src; image.alt = '';
+  const image = document.createElement('img'); image.src = preset.displaySrc ?? preset.src; image.alt = '';
   const label = document.createElement('span'); label.textContent = preset.name; option.append(image, label);
   option.addEventListener('click', () => setPreset(index)); card.append(option);
   if (preset.filename) {
@@ -542,9 +551,9 @@ function appendPreset(preset, index) {
 async function initializePresets() {
   const lastSelected = selectedPreset();
   const loaded = await Promise.all(PRESETS.map(async preset => {
-    const response = await fetch(preset.src); if (!response.ok) throw new Error(`无法加载参考图：${preset.name}`);
-    const blob = await response.blob(); const bytes = preset.animated ? new Uint8Array(await blob.arrayBuffer()) : null;
+    const blob = await loadBuiltinPreset(preset.src); const bytes = preset.animated ? new Uint8Array(await blob.arrayBuffer()) : null;
     const bitmap = await createImageBitmap(blob); const canvas = bitmapCanvas(bitmap); bitmap.close();
+    preset.displaySrc = URL.createObjectURL(blob);
     const image = { width: canvas.width, height: canvas.height, data: canvasPixels(canvas) }; canvas.width = canvas.height = 0; return { image, bytes };
   }));
   state.presetImages = loaded.map(item => item.image); state.presetGifBytes = loaded.map(item => item.bytes);
@@ -557,6 +566,7 @@ async function initializePresets() {
     }
   } catch { showToast('浏览器本地存储暂不可用，自定义参考图仍可在本次使用。'); }
   const index = PRESETS.findIndex(preset => presetKey(preset) === lastSelected); renderPresets(index < 0 ? 0 : index);
+  phantomTank.refreshPresets();
   const key = presetKey(PRESETS[state.presetIndex]);
   for (const entry of state.encode) if (!entry.started) entry.settings = settingsForConversion({ ...entry.settings, preset: key }, entry.isGif, key, entry.settingsTouched);
   const initialEntry = activeEntry('encode');
@@ -571,6 +581,7 @@ async function removeCustomPreset(preset) {
   const selected = PRESETS[state.presetIndex]; const wasSelected = selected === preset;
   const [image] = state.presetImages.splice(index, 1); state.presetGifBytes.splice(index, 1); PRESETS.splice(index, 1);
   renderPresets(wasSelected ? 0 : PRESETS.indexOf(selected));
+  phantomTank.refreshPresets();
   for (const entry of state.encode) if (entry.settings.preset === preset.id) {
     cancelEntry(entry); entry.settings = settingsForConversion({ ...entry.settings, preset: presetKey(PRESETS[0]) }, entry.isGif, presetKey(PRESETS[0]), entry.settingsTouched); entry.result = entry.cached = null; entry.status = 'idle'; entry.label = '参考图已删除，已切换默认参考图';
     if (entry.started) scheduleEntry(entry, 'encode', 350);
@@ -580,7 +591,7 @@ async function removeCustomPreset(preset) {
   showToast(`已删除「${preset.name}」`, false, { label: '撤销', run: async () => {
     if (preset.saved) await savePreset(preset.record);
     if (PRESETS.some(item => item.id === preset.id)) return;
-    preset.src = URL.createObjectURL(preset.record.blob); PRESETS.push(preset); state.presetImages.push(image); state.presetGifBytes.push(preset.animated ? new Uint8Array(await preset.record.blob.arrayBuffer()) : null); renderPresets(wasSelected ? PRESETS.length - 1 : state.presetIndex);
+    preset.src = URL.createObjectURL(preset.record.blob); PRESETS.push(preset); state.presetImages.push(image); state.presetGifBytes.push(preset.animated ? new Uint8Array(await preset.record.blob.arrayBuffer()) : null); renderPresets(wasSelected ? PRESETS.length - 1 : state.presetIndex); phantomTank.refreshPresets();
     if (wasSelected) settingsChanged({ presetOnly: true });
   } });
 }
@@ -599,7 +610,7 @@ async function loadCustomPreset(file) {
   let saved = true;
   try { await savePreset(record); } catch { saved = false; showToast('本地保存未成功，这张参考图仍可在本次使用。', true); }
   const preset = { id, name: record.name, filename: file.name, src: URL.createObjectURL(blob), saved, record, animated };
-  PRESETS.push(preset); state.presetImages.push(image); state.presetGifBytes.push(animated ? new Uint8Array(await blob.arrayBuffer()) : null); appendPreset(preset, PRESETS.length - 1); setPreset(PRESETS.length - 1);
+  PRESETS.push(preset); state.presetImages.push(image); state.presetGifBytes.push(animated ? new Uint8Array(await blob.arrayBuffer()) : null); appendPreset(preset, PRESETS.length - 1); setPreset(PRESETS.length - 1); phantomTank.refreshPresets();
 }
 
 for (const [inputId, pickerId, kind] of [['source-file', 'source-picker', 'encode'], ['encoded-file', 'encoded-picker', 'decode']]) {
@@ -653,6 +664,7 @@ $('#preset-list').addEventListener('keydown', event => {
 document.querySelectorAll('.tab').forEach(button => button.addEventListener('click', () => {
   document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('is-active', tab === button));
   document.querySelectorAll('.view').forEach(section => { const active = section.id === `${button.dataset.view}-view`; section.hidden = !active; section.classList.toggle('is-visible', active); });
+  document.body.classList.toggle('phantom-active', button.dataset.view === 'phantom');
   syncDesktopLayout(); requestAnimationFrame(() => previews.apply());
 }));
 initializePresets().catch(error => showToast(error.message, true));

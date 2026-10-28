@@ -24,13 +24,14 @@ const downloads = await mkdtemp(join(temporaryRoot, 'downloads-'));
 const browser = spawn(chrome, [
   '--headless=new',
   '--disable-gpu',
+  '--disable-extensions',
   '--no-sandbox',
   '--remote-debugging-port=0',
   '--remote-allow-origins=*',
   `--user-data-dir=${profile}`,
   `--crash-dumps-dir=${temporaryRoot}`,
   '--window-size=1440,1100',
-  testUrl,
+  'about:blank',
 ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true, env: artifactEnvironment(temporaryRoot) });
 
 let browserOutput = '';
@@ -66,6 +67,10 @@ const socket = new WebSocket(pageTarget.webSocketDebuggerUrl);
 const pending = new Map();
 const pageErrors = [];
 const finishedDownloads = [];
+const builtinImageRequests = [];
+const networkFailures = [];
+const networkRequests = new Map();
+let trackBuiltinRequests = false;
 let nextId = 1;
 await new Promise((resolve, reject) => {
   socket.addEventListener('open', resolve, { once: true });
@@ -73,7 +78,11 @@ await new Promise((resolve, reject) => {
 });
 socket.addEventListener('message', (event) => {
   const message = JSON.parse(event.data);
+  if (message.method === 'Network.requestWillBeSent') networkRequests.set(message.params.requestId, message.params.request.url);
+  if (trackBuiltinRequests && message.method === 'Network.requestWillBeSent' && new URL(message.params.request.url).pathname.includes('/assets/images/')) builtinImageRequests.push(message.params.request.url);
+  if (message.method === 'Network.loadingFailed') networkFailures.push({ url: networkRequests.get(message.params.requestId), error: message.params.errorText });
   if (message.method === 'Browser.downloadProgress' && message.params.state === 'completed') finishedDownloads.push(message.params.guid);
+  if (message.method === 'Runtime.consoleAPICalled' && message.params.type === 'error') pageErrors.push(message.params.args.map(arg => arg.value ?? arg.description).join(' '));
   if (message.method === 'Runtime.exceptionThrown') {
     pageErrors.push(message.params.exceptionDetails.exception?.description ?? message.params.exceptionDetails.text);
   }
@@ -106,7 +115,7 @@ async function waitFor(expression, timeoutMs = 120000) {
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
   const diagnostic = await evaluate(`({ presets:document.querySelectorAll('.preset-option').length, result:document.querySelector('#result-summary')?.textContent, toast:document.querySelector('#toast')?.textContent, custom:document.querySelector('#custom-preset-hint')?.textContent, rows:[...document.querySelectorAll('.batch-item')].map(row=>({status:row.dataset.status,label:row.querySelector('small').textContent})), focus:document.activeElement?.outerHTML.slice(0,300) })`);
-  throw new Error(`Timed out waiting for: ${expression}; ${JSON.stringify({ ...diagnostic, pageErrors })}`);
+  throw new Error(`Timed out waiting for: ${expression}; ${JSON.stringify({ ...diagnostic, pageErrors, networkFailures })}`);
 }
 
 async function setInputFile(selector, path, append = false) {
@@ -130,10 +139,147 @@ applicationChecks: try {
   await command('Runtime.enable');
   await command('Page.enable');
   await command('DOM.enable');
+  await command('Network.enable');
   await command('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads, eventsEnabled: true });
+  await command('Page.navigate', { url: testUrl });
   await waitFor('document.querySelectorAll(".preset-option").length === 6');
   await waitFor('!document.querySelector("#custom-preset-picker").disabled');
   await waitFor(`document.querySelector('.tutorial:not([hidden])')?.dataset.tour==='encode'`);
+  if (process.argv.includes('--phantom-only')) {
+    await evaluate(`document.querySelector('.tutorial-close').click()`);
+    await evaluate(`document.querySelector('[data-view="phantom"]').click()`);
+    await waitFor(`document.querySelectorAll('#phantom-presets .phantom-preset').length===6`);
+    const initialSelections = await evaluate(`(()=>({page:[...document.querySelectorAll('[data-phantom-page]')].filter(button=>button.getAttribute('aria-pressed')==='true').map(button=>button.dataset.phantomPage),mode:[...document.querySelectorAll('[data-phantom-mode]')].filter(button=>button.getAttribute('aria-pressed')==='true').map(button=>button.dataset.phantomMode)}))()`);
+    if (JSON.stringify(initialSelections) !== JSON.stringify({ page: ['create'], mode: ['mono'] })) throw new Error(`Phantom controls must initially select create and monochrome: ${JSON.stringify(initialSelections)}`);
+    await evaluate(`document.querySelector('[data-preview="mosaic"]').click()`);
+    if (!await evaluate(`document.querySelector('[data-phantom-page="create"]').classList.contains('is-active')&&document.querySelector('[data-phantom-mode="mono"]').classList.contains('is-active')&&document.querySelector('[data-phantom-mode="mono"]').getAttribute('aria-pressed')==='true'`)) throw new Error('Changing the other preview mode must not clear phantom selections');
+    await setInputFile('#phantom-outer-file', fileURLToPath(new URL('./fixtures/static/4.jpg', import.meta.url)));
+    await waitFor(`document.querySelector('#phantom-outer-name').textContent.includes('4.jpg')`);
+    await evaluate(`document.querySelector('#phantom-generate').click()`);
+    await waitFor(`!document.querySelector('#phantom-download').disabled`);
+    const defaultMono = await evaluate(`(()=>{const canvas=document.querySelector('#phantom-canvas'),data=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;return {grayscale:data.every((value,index)=>index%4!==0||(value===data[index+1]&&value===data[index+2])),selected:document.querySelector('[data-phantom-mode="mono"]').getAttribute('aria-pressed')}})()`);
+    if (!defaultMono.grayscale || defaultMono.selected !== 'true') throw new Error(`Initial phantom generation must be monochrome: ${JSON.stringify(defaultMono)}`);
+    await evaluate(`document.querySelector('[data-phantom-mode="color"]').click()`);
+    await waitFor(`!document.querySelector('#phantom-download').disabled&&document.querySelector('[data-phantom-mode="color"]').getAttribute('aria-pressed')==='true'`);
+    const generated = await evaluate(`(() => {const canvas=document.querySelector('#phantom-canvas'),data=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;let colored=0;for(let i=0;i<data.length;i+=404){if(data[i+3]&&Math.max(data[i],data[i+1],data[i+2])-Math.min(data[i],data[i+1],data[i+2])>24)colored++}return {width:canvas.width,height:canvas.height,mode:document.querySelector('[data-phantom-mode="color"]').getAttribute('aria-pressed'),colored,status:document.querySelector('#phantom-status').textContent,message:document.querySelector('#phantom-result-message').textContent,settings:['#phantom-outer-contrast','#phantom-outer-brightness','#phantom-inner-contrast','#phantom-inner-brightness'].map(selector=>document.querySelector(selector).value),advancedOpen:document.querySelector('.phantom-advanced').open,autoControl:Boolean(document.querySelector('#phantom-auto-adjust'))}})()`);
+    if (generated.width < 1 || generated.height < 1 || generated.mode !== 'true' || generated.colored < 1
+      || !generated.message.includes('白底外图') || generated.settings.some(value => value !== '50')
+      || generated.advancedOpen || generated.autoControl) throw new Error(`Color phantom output must use fixed Mirage defaults without an auto-match control: ${JSON.stringify(generated)}`);
+    const fitBeforeZoom = await evaluate(`(()=>{const canvas=document.querySelector('#phantom-canvas').getBoundingClientRect(),stage=document.querySelector('#phantom-stage').getBoundingClientRect(),viewport=document.querySelector('#phantom-stage .canvas-viewport');return {canvasWidth:canvas.width,canvasHeight:canvas.height,stageWidth:stage.width,stageHeight:stage.height,scrollWidth:viewport.scrollWidth,clientWidth:viewport.clientWidth,readout:document.querySelector('#phantom-zoom-value').textContent}})()`);
+    if (fitBeforeZoom.canvasWidth > fitBeforeZoom.stageWidth + 1 || fitBeforeZoom.canvasHeight > fitBeforeZoom.stageHeight + 1 || fitBeforeZoom.scrollWidth > fitBeforeZoom.clientWidth + 1) throw new Error(`Phantom result must initially fit its viewport: ${JSON.stringify(fitBeforeZoom)}`);
+    await evaluate(`document.querySelector('#phantom-create-view [data-zoom="in"]').click()`);
+    const zoomedPreview = await evaluate(`(()=>{const canvas=document.querySelector('#phantom-canvas').getBoundingClientRect(),viewport=document.querySelector('#phantom-stage .canvas-viewport');return {canvasWidth:canvas.width,scrollWidth:viewport.scrollWidth,clientWidth:viewport.clientWidth,readout:document.querySelector('#phantom-zoom-value').textContent}})()`);
+    if (zoomedPreview.canvasWidth <= fitBeforeZoom.canvasWidth || zoomedPreview.scrollWidth <= zoomedPreview.clientWidth || zoomedPreview.readout === fitBeforeZoom.readout) throw new Error(`Phantom zoom control did not enlarge and scroll the preview: ${JSON.stringify(zoomedPreview)}`);
+    await evaluate(`document.querySelector('#phantom-create-view [data-zoom="fit"]').click()`);
+    const fitRestored = await evaluate(`(()=>{const canvas=document.querySelector('#phantom-canvas').getBoundingClientRect(),viewport=document.querySelector('#phantom-stage .canvas-viewport');return {canvasWidth:canvas.width,canvasHeight:canvas.height,clientWidth:viewport.clientWidth,clientHeight:viewport.clientHeight,scrollWidth:viewport.scrollWidth,scrollHeight:viewport.scrollHeight}})()`);
+    if (fitRestored.scrollWidth > fitRestored.clientWidth + 1 || fitRestored.scrollHeight > fitRestored.clientHeight + 1) throw new Error(`Fit control did not restore the image to the viewport: ${JSON.stringify(fitRestored)}`);
+    const qualityExpression = mode => `(async()=>{
+       const {adjustPhantomImage,fitPhantomInner}=await import('./src/phantom-tank.mjs');
+      const {imageSimilarity}=await import('./src/core.mjs');
+      const canvas=document.querySelector('#phantom-canvas'),width=canvas.width,height=canvas.height,mode=${JSON.stringify(mode)};
+      const values=['outer-contrast','outer-brightness','inner-contrast','inner-brightness'].map(name=>Number(document.querySelector('#phantom-'+name).value));
+      async function read(src){const bitmap=await createImageBitmap(await(await fetch(src)).blob()),surface=document.createElement('canvas');surface.width=bitmap.width;surface.height=bitmap.height;surface.getContext('2d').drawImage(bitmap,0,0);bitmap.close();return surface.getContext('2d').getImageData(0,0,surface.width,surface.height)}
+      const outerSurface=document.createElement('canvas');outerSurface.width=width;outerSurface.height=height;
+      const outerContext=outerSurface.getContext('2d');outerContext.imageSmoothingQuality='high';
+      const outerBitmap=await createImageBitmap(await(await fetch(document.querySelector('#phantom-outer-thumb').src)).blob());
+      outerContext.drawImage(outerBitmap,0,0,width,height);outerBitmap.close();
+      const outerRaw=outerContext.getImageData(0,0,width,height);
+      const innerRaw=fitPhantomInner(await read(document.querySelector('#phantom-presets .phantom-preset[aria-pressed="true"] img').src),width,height);
+      const outer=adjustPhantomImage(outerRaw,{contrast:values[0],brightness:values[1]},mode);
+      const inner=adjustPhantomImage(innerRaw,{contrast:values[2],brightness:values[3]},mode);
+      function measure(output,outerTarget,innerTarget){const black=new Uint8ClampedArray(output.data.length),white=new Uint8ClampedArray(output.data.length);for(let i=0;i<output.data.length;i+=4){const a=output.data[i+3]/255;for(let c=0;c<3;c++){black[i+c]=output.data[i+c]*a;white[i+c]=output.data[i+c]*a+255*(1-a)}black[i+3]=white[i+3]=255}return {outer:imageSimilarity(white,outerTarget.data,width,height,512,mode==='color'),inner:imageSimilarity(black,innerTarget.data,width,height,512,mode==='color')}}
+       const originalOuter=adjustPhantomImage(outerRaw,{},mode),originalInner=adjustPhantomImage(innerRaw,{},mode);
+       const rendered=canvas.getContext('2d').getImageData(0,0,width,height);
+       const selected=measure(rendered,originalOuter,originalInner);
+       return {selected,settings:values};
+     })()`;
+    const colorQuality = await evaluate(qualityExpression('color'));
+    if (Object.values(colorQuality.selected).some(value => !Number.isFinite(value)) || colorQuality.settings.some(value => value !== 50)) throw new Error(`Colored phantom did not use fixed Mirage v5 defaults: ${JSON.stringify(colorQuality)}`);
+    await evaluate(`(()=>{const input=document.querySelector('#phantom-outer-brightness');input.value='60';input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await waitFor(`!document.querySelector('#phantom-download').disabled&&document.querySelector('#phantom-outer-brightness-value').textContent==='60'`);
+    await evaluate(`document.querySelector('[data-phantom-reset="outerBrightness"]').click()`);
+    await waitFor(`!document.querySelector('#phantom-download').disabled&&document.querySelector('#phantom-outer-brightness-value').textContent==='50'`);
+    await evaluate(`document.querySelector('.phantom-advanced').open=false`);
+    await evaluate(`document.querySelector('#phantom-light').click()`);
+    if (!await evaluate(`document.querySelector('#phantom-stage').dataset.light==='off'&&document.querySelector('#phantom-light-state').textContent==='关灯'&&document.querySelector('#phantom-light').getAttribute('aria-label')==='开灯显示白底外图'`)) throw new Error('Light switch did not reveal the dark-background inner image');
+    await evaluate(`document.querySelector('[data-phantom-mode="mono"]').click()`);
+    await waitFor(`!document.querySelector('#phantom-download').disabled&&document.querySelector('[data-phantom-mode="mono"]').getAttribute('aria-pressed')==='true'`);
+    const monochrome = await evaluate(`(() => {const canvas=document.querySelector('#phantom-canvas'),pixel=canvas.getContext('2d').getImageData(Math.floor(canvas.width/2),Math.floor(canvas.height/2),1,1).data;return {width:canvas.width,height:canvas.height,pixel:[...pixel],light:document.querySelector('#phantom-stage').dataset.light}})()`);
+    if (monochrome.width !== generated.width || monochrome.height !== generated.height || monochrome.pixel[0] !== monochrome.pixel[1] || monochrome.pixel[1] !== monochrome.pixel[2] || monochrome.light !== 'off') throw new Error(`Monochrome phantom output or light preview is incorrect: ${JSON.stringify(monochrome)}`);
+    const monoQuality = await evaluate(qualityExpression('mono'));
+    if (Object.values(monoQuality.selected).some(value => !Number.isFinite(value)) || monoQuality.settings.some(value => value !== 50)) throw new Error(`Monochrome phantom did not use fixed Mirage v4 defaults: ${JSON.stringify(monoQuality)}`);
+    const downloadStart = finishedDownloads.length;
+    await evaluate(`document.querySelector('#phantom-download').click()`);
+    const downloadDeadline = Date.now() + 20000;
+    while (finishedDownloads.length === downloadStart && Date.now() < downloadDeadline) await new Promise(resolve => setTimeout(resolve, 100));
+    if (finishedDownloads.length === downloadStart) throw new Error('Phantom PNG download did not complete');
+    const downloadedPhantom = await decode(join(downloads, '4-幻影坦克.png'), generated.width, generated.height);
+    let transparentPixels = 0;
+    for (let offset = 3; offset < downloadedPhantom.data.length; offset += 4) if (downloadedPhantom.data[offset] < 255) transparentPixels += 1;
+    if (transparentPixels < 1) throw new Error('Downloaded phantom PNG lost its alpha channel');
+    await setInputFile('#phantom-inner-file', fileURLToPath(new URL('./fixtures/static/3.jpg', import.meta.url)));
+    await waitFor(`document.querySelector('#phantom-presets .phantom-preset[data-key="custom"][aria-pressed="true"]')&&!document.querySelector('#phantom-download').disabled`);
+    if (!await evaluate(`document.querySelectorAll('#phantom-presets .phantom-preset-remove').length===1&&document.querySelector('#phantom-presets .phantom-preset[data-key="custom"]').parentElement.querySelector('.phantom-preset-remove')?.getAttribute('aria-label').includes('3.jpg')`)) throw new Error('Uploaded phantom reference must have its own accessible delete button');
+    await evaluate(`document.querySelector('#phantom-presets .phantom-preset[data-key="custom"]').parentElement.querySelector('.phantom-preset-remove').click()`);
+    await waitFor(`document.querySelectorAll('#phantom-presets .phantom-preset').length===6&&!document.querySelector('#phantom-presets .phantom-preset[data-key="custom"]')&&!document.querySelector('#phantom-download').disabled`);
+    if (!await evaluate(`document.querySelectorAll('#phantom-presets .phantom-preset[aria-pressed="true"]').length===1&&document.querySelectorAll('#phantom-presets .phantom-preset-remove').length===0`)) throw new Error('Deleting selected phantom reference must select a builtin and regenerate');
+    await setInputFile('#custom-preset-file', fileURLToPath(new URL('./fixtures/static/3.jpg', import.meta.url)));
+    await waitFor(`document.querySelectorAll('.preset-option').length===7&&document.querySelectorAll('#phantom-presets .phantom-preset').length===7`);
+    await evaluate(`document.querySelector('#phantom-presets .phantom-preset-remove').parentElement.querySelector('.phantom-preset').click()`);
+    await waitFor(`document.querySelector('#phantom-presets .phantom-preset[aria-pressed="true"]').parentElement.querySelector('.phantom-preset-remove')&&!document.querySelector('#phantom-download').disabled`);
+    await evaluate(`document.querySelector('#phantom-presets .phantom-preset-remove').click()`);
+    await waitFor(`document.querySelectorAll('.preset-option').length===6&&document.querySelectorAll('#phantom-presets .phantom-preset').length===6&&!document.querySelector('#phantom-download').disabled`);
+    await evaluate(`document.querySelector('#toast .toast-action').click()`);
+    await waitFor(`document.querySelectorAll('.preset-option').length===7&&document.querySelectorAll('#phantom-presets .phantom-preset-remove').length===1`);
+    await evaluate(`document.querySelector('#phantom-presets .phantom-preset-remove').click()`);
+    await waitFor(`document.querySelectorAll('.preset-option').length===6&&document.querySelectorAll('#phantom-presets .phantom-preset').length===6`);
+    const revealData = await evaluate(`(()=>{const canvas=document.createElement('canvas');canvas.width=canvas.height=12;const context=canvas.getContext('2d');context.fillStyle='rgba(230,40,70,.5)';context.fillRect(2,2,8,8);return canvas.toDataURL('image/png').split(',')[1]})()`);
+    const revealPath = join(temporaryRoot, 'phantom-reveal-alpha.png');
+    await writeFile(revealPath, Buffer.from(revealData, 'base64'));
+    await evaluate(`document.querySelector('[data-phantom-page="reveal"]').click()`);
+    await setInputFile('#phantom-reveal-file', revealPath);
+    await waitFor(`document.querySelector('#phantom-reveal-status').textContent.includes('检测到透明区域')`);
+    const reveal = await evaluate(`(()=>{const canvas=document.querySelector('#phantom-reveal-canvas'),pixel=canvas.getContext('2d').getImageData(5,5,1,1).data;document.querySelector('#phantom-reveal-light').click();return {width:canvas.width,height:canvas.height,alpha:pixel[3],light:document.querySelector('#phantom-reveal-stage').dataset.light}})()`);
+    if (reveal.alpha < 120 || reveal.alpha > 136 || reveal.light !== 'off') throw new Error(`Phantom reveal did not preserve alpha or switch backgrounds: ${JSON.stringify(reveal)}`);
+    const revealFit = await evaluate(`(()=>{const canvas=document.querySelector('#phantom-reveal-canvas').getBoundingClientRect(),stage=document.querySelector('#phantom-reveal-stage').getBoundingClientRect();return {canvasWidth:canvas.width,canvasHeight:canvas.height,stageWidth:stage.width,stageHeight:stage.height,selected:[...document.querySelectorAll('[data-phantom-page]')].filter(button=>button.getAttribute('aria-pressed')==='true').length}})()`);
+    if (revealFit.canvasWidth > revealFit.stageWidth + 1 || revealFit.canvasHeight > revealFit.stageHeight + 1 || revealFit.selected !== 1) throw new Error(`Phantom reveal must fit the stage and have one selected page: ${JSON.stringify(revealFit)}`);
+    await screenshot('naiwa-phantom-reveal-desktop.png');
+    await evaluate(`document.querySelector('[data-phantom-page="create"]').click()`);
+    for (const width of [320, 390, 768, 1440]) {
+      await command('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: width < 500 });
+      const layout = await evaluate(`(() => {const panel=document.querySelector('.phantom-layout').getBoundingClientRect(),controls=document.querySelector('.phantom-controls'),controlsBox=controls.getBoundingClientRect(),result=document.querySelector('.phantom-result').getBoundingClientRect(),stage=document.querySelector('.phantom-stage').getBoundingClientRect(),view=document.querySelector('#phantom-view').getBoundingClientRect(),shell=document.querySelector('.page-shell').getBoundingClientRect(),footer=document.querySelector('.site-footer').getBoundingClientRect();return {document:document.documentElement.scrollWidth,documentHeight:document.documentElement.scrollHeight,viewportHeight:innerHeight,shellBottom:shell.bottom,viewTop:view.top,viewBottom:view.bottom,panelTop:panel.top,panelBottom:panel.bottom,footerTop:footer.top,panelRight:panel.right,controlsBottom:controlsBox.bottom,resultTop:result.top,controlsRight:controlsBox.right,resultLeft:result.left,controlsHeight:controls.clientHeight,controlsScroll:controls.scrollHeight,stageWidth:stage.width}})()`);
+      if (layout.document > width || layout.panelRight > width || layout.stageWidth < 180
+        || (width < 641 && layout.controlsBottom > layout.resultTop + 1)
+        || (width >= 641 && (layout.controlsRight > layout.resultLeft + 1 || layout.documentHeight > layout.viewportHeight + 1 || layout.controlsScroll > layout.controlsHeight + 1))) throw new Error(`Phantom page layout is invalid at ${width}px: ${JSON.stringify(layout)}`);
+      if (width === 320) {
+        await evaluate(`document.querySelector('[data-phantom-page="reveal"]').click()`);
+        const revealLayout = await evaluate(`(()=>{const stage=document.querySelector('#phantom-reveal-stage').getBoundingClientRect();return {document:document.documentElement.scrollWidth,stageRight:stage.right,stageWidth:stage.width}})()`);
+        if (revealLayout.document > width || revealLayout.stageRight > width || revealLayout.stageWidth < 180) throw new Error(`Phantom reveal layout is invalid at 320px: ${JSON.stringify(revealLayout)}`);
+        await evaluate(`document.querySelector('[data-phantom-page="create"]').click()`);
+      }
+      if (width === 390) await screenshot('naiwa-phantom-mobile.png');
+    }
+    await command('Emulation.setDeviceMetricsOverride', { width: 1440, height: 768, deviceScaleFactor: 1, mobile: false });
+    const shortDesktop = await evaluate(`(()=>{const controls=document.querySelector('.phantom-controls');return {documentHeight:document.documentElement.scrollHeight,viewportHeight:innerHeight,controlsHeight:controls.clientHeight,controlsScroll:controls.scrollHeight}})()`);
+    if (shortDesktop.documentHeight > 769 || shortDesktop.controlsScroll > shortDesktop.controlsHeight + 1) throw new Error(`Phantom desktop does not fit at 1440x768: ${JSON.stringify(shortDesktop)}`);
+    await screenshot('naiwa-phantom-desktop-short.png');
+    await command('Emulation.clearDeviceMetricsOverride');
+    await screenshot('naiwa-phantom-desktop.png');
+    const cachedPresets = await evaluate(`new Promise((resolve,reject)=>{const request=indexedDB.open('naiwa-custom-presets');request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result,version=db.version,transaction=db.transaction('builtin-presets','readonly'),records=transaction.objectStore('builtin-presets').getAll();transaction.oncomplete=()=>{resolve({version,count:records.result.length,blobs:records.result.every(record=>record.blob instanceof Blob&&record.blob.size>0),gifs:records.result.filter(record=>record.blob.type==='image/gif').length});db.close()};transaction.onerror=()=>reject(transaction.error)}})`);
+    if (cachedPresets.version !== 2 || cachedPresets.count !== 6 || !cachedPresets.blobs || cachedPresets.gifs !== 2) throw new Error(`All six builtin image files including GIFs must be cached in IndexedDB: ${JSON.stringify(cachedPresets)}`);
+    trackBuiltinRequests = true;
+    await command('Network.setCacheDisabled', { cacheDisabled: true });
+    await command('Network.setBlockedURLs', { urls: ['*assets/images/*'] });
+    await command('Page.reload', { ignoreCache: true });
+    await waitFor(`document.querySelectorAll('.preset-option').length===6&&!document.querySelector('#custom-preset-picker').disabled`);
+    await evaluate(`document.querySelector('[data-view="phantom"]').click()`);
+    await waitFor(`document.querySelectorAll('#phantom-presets .phantom-preset').length===6&&[...document.querySelectorAll('.preset-option img, .phantom-preset img')].every(image=>image.src.startsWith('blob:')&&image.complete&&image.naturalWidth>0)`);
+    if (builtinImageRequests.length) throw new Error(`Cached builtin references must load without image network requests: ${JSON.stringify(builtinImageRequests)}`);
+    if (!await evaluate(`document.querySelectorAll('#phantom-presets .phantom-preset-remove').length===0&&document.querySelector('[data-phantom-mode="mono"]').getAttribute('aria-pressed')==='true'`)) throw new Error('Deleted references reappeared or default mode changed after reload');
+    if (pageErrors.length) throw new Error(`Phantom runtime errors: ${pageErrors.join(' | ')}`);
+    console.log(`phantom browser checks passed: ${JSON.stringify({ generated, colorQuality, monochrome, monoQuality, transparentPixels, reveal, cachedPresets, builtinImageRequests, referenceDeletion: true, defaultMono })}`);
+    break applicationChecks;
+  }
   if (!await evaluate(`document.querySelector('.tutorial-next').disabled&&localStorage.getItem('naiwa-tutorial-v1-encode')===null`)) throw new Error('Tutorial must require the current action and remain unseen');
   await screenshot('naiwa-tutorial-desktop.png');
   await evaluate(`document.querySelector('.tutorial-next').click()`);
