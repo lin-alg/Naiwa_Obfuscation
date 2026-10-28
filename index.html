@@ -15,7 +15,7 @@
         <span>NAI-HUB <span class="brand-divider">/</span> 奶蛙混淆</span>
       </a>
       <div class="topbar-actions">
-        <button class="tutorial-button" id="tutorial-button" type="button"><span aria-hidden="true">?</span>使用教程</button>
+        <button class="tutorial-button" id="tutorial-button" type="button" aria-label="使用教程" title="使用教程"><span aria-hidden="true">?</span><span class="tutorial-label">使用教程</span></button>
         <div class="local-badge"><span class="status-dot"></span> 本地处理所有文件</div>
         <div class="site-stats" aria-label="网站统计" aria-live="polite">
           <span>总访客数 <strong id="visitor-count">—</strong></span>
@@ -64,8 +64,9 @@
               <p class="field-hint" id="custom-preset-hint">添加的图片会保存在当前浏览器中。</p>
             </section>
 
-            <section class="control-section basic-settings">
-              <div class="section-heading"><span class="step-index">03</span><h2>输出选项</h2></div>
+            <details class="control-section basic-settings" id="output-options" open>
+              <summary class="section-heading"><span class="step-index">03</span><h2>输出选项</h2></summary>
+              <div class="output-settings-content">
               <div class="field-line"><label class="field-label" for="jpg-quality">JPG 质量</label><output id="jpg-quality-value" for="jpg-quality">75%</output></div>
               <input id="jpg-quality" type="range" min="50" max="95" step="1" value="75" aria-describedby="jpg-quality-hint">
               <div class="range-labels"><span>文件更小</span><span>画面更细腻</span></div>
@@ -119,7 +120,8 @@
                   <button class="quiet-button wide-button" id="download-png" type="button" disabled>另存压缩前 PNG</button>
                 </div>
               </details>
-            </section>
+              </div>
+            </details>
 
             <div class="generate-actions">
               <button class="primary-button" id="encode-button" type="button" disabled>生成混淆图</button>

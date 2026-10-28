@@ -670,6 +670,7 @@ document.querySelectorAll('.tab').forEach(button => button.addEventListener('cli
 }));
 initializePresets().catch(error => showToast(error.message, true));
 syncSettings(); syncBatch('encode'); syncBatch('decode');
+if (matchMedia('(max-width: 640px)').matches) $('#output-options').open = false;
 initializeTutorial();
 const analytics = initializeAnalytics();
 

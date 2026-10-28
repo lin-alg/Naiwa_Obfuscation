@@ -290,7 +290,10 @@ export function initializeTutorial() {
       button.addEventListener('click', () => go(stepIndex)); return button;
     }));
     target?.classList.remove('tutorial-target');
-    target = resolveTarget(step); target?.classList.add('tutorial-target');
+    target = resolveTarget(step);
+    const disclosure = target?.closest('details');
+    if (disclosure) disclosure.open = true;
+    target?.classList.add('tutorial-target');
     target?.scrollIntoView({ block: matchMedia('(max-width: 640px)').matches ? 'start' : 'center', inline: 'nearest', behavior: 'instant' });
     card.scrollTop = 0; refreshGate(); position(); requestPosition();
   }
