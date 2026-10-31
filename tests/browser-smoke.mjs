@@ -142,15 +142,15 @@ applicationChecks: try {
   await command('Network.enable');
   await command('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: downloads, eventsEnabled: true });
   await command('Page.navigate', { url: testUrl });
-  await waitFor('document.querySelectorAll(".preset-option").length === 6');
+  await waitFor('document.querySelectorAll(".preset-option").length === 7');
   await waitFor('!document.querySelector("#custom-preset-picker").disabled');
   await waitFor(`document.querySelector('.tutorial:not([hidden])')?.dataset.tour==='encode'`);
   if (process.argv.includes('--morph-only')) {
     await evaluate(`document.querySelector('.tutorial-close').click()`);
     await evaluate(`document.querySelector('[data-view="morph"]').click()`);
-    await waitFor(`document.querySelectorAll('#morph-presets .morph-preset').length===4`);
-    const presetState = await evaluate(`(()=>({count:document.querySelectorAll('#morph-presets .morph-preset').length,animated:[...document.querySelectorAll('#morph-presets img')].some(image=>image.src.endsWith('.gif')),selected:document.querySelector('#morph-presets .morph-preset[aria-checked="true"] span')?.textContent,highlighted:document.querySelectorAll('#morph-presets .morph-preset.is-active').length}))()`);
-    if (presetState.count !== 4 || presetState.animated || presetState.selected !== '奶蛙' || presetState.highlighted !== 1) throw new Error(`Morph references must begin with static presets and one visible selection: ${JSON.stringify(presetState)}`);
+    await waitFor(`document.querySelectorAll('#morph-presets .morph-preset').length===5`);
+    const presetState = await evaluate(`(()=>({count:document.querySelectorAll('#morph-presets .morph-preset').length,animated:[...document.querySelectorAll('#morph-presets img')].some(image=>image.src.endsWith('.gif')),names:[...document.querySelectorAll('#morph-presets .morph-preset span')].map(label=>label.textContent),selected:document.querySelector('#morph-presets .morph-preset[aria-checked="true"] span')?.textContent,highlighted:document.querySelectorAll('#morph-presets .morph-preset.is-active').length}))()`);
+    if (presetState.count !== 5 || presetState.animated || !presetState.names.includes('Kobe') || presetState.selected !== '奶蛙' || presetState.highlighted !== 1) throw new Error(`Morph references must include Kobe and one visible selection: ${JSON.stringify(presetState)}`);
     if (!await evaluate(`document.querySelector('#morph-resolution').value==='128'&&document.querySelector('#morph-proximity').value==='13'&&document.querySelectorAll('.morph-crop [data-crop-axis]').length===6`)) throw new Error('Morph detail and proximity sliders must have stable defaults alongside independent framing controls');
 
     const dragFixture = fileURLToPath(new URL('./fixtures/static/4.jpg', import.meta.url));
@@ -170,12 +170,12 @@ applicationChecks: try {
     if (!await evaluate(`document.querySelector('[data-preview-zoom-value="source"]').textContent==='120%'&&getComputedStyle(document.querySelector('#morph-source-viewport')).touchAction==='none'`)) throw new Error('Wheel zoom must enlarge the preview and enable panning');
     await evaluate(`document.querySelector('[data-preview-fit="source"]').click()`);
     await evaluate(`document.querySelector('[data-preview-controls="source"] [data-preview-zoom="in"]').click()`);
-    const panStart = await evaluate(`(()=>{const rect=document.querySelector('#morph-source-viewport').getBoundingClientRect(),image=document.querySelector('#morph-source-preview');return {x:rect.left+rect.width/2,y:rect.top+rect.height/2,scale:new DOMMatrix(getComputedStyle(image).transform).a,hidden:image.hidden,zoom:document.querySelector('[data-preview-zoom-value="source"]').textContent,disabled:document.querySelector('[data-preview-controls="source"] [data-preview-zoom="in"]').disabled}})()`);
+    const panStart = await evaluate(`(()=>{const rect=document.querySelector('#morph-source-viewport').getBoundingClientRect(),image=document.querySelector('#morph-source-preview');return {x:rect.left+rect.width/2,y:rect.top+rect.height/2,scale:new DOMMatrix(getComputedStyle(image).transform).a,hidden:image.hidden,draggable:image.draggable,zoom:document.querySelector('[data-preview-zoom-value="source"]').textContent,disabled:document.querySelector('[data-preview-controls="source"] [data-preview-zoom="in"]').disabled}})()`);
     await command('Input.dispatchMouseEvent', { type: 'mousePressed', x: panStart.x, y: panStart.y, button: 'left', buttons: 1 });
     await command('Input.dispatchMouseEvent', { type: 'mouseMoved', x: panStart.x + 20, y: panStart.y + 12, button: 'left', buttons: 1 });
     await command('Input.dispatchMouseEvent', { type: 'mouseReleased', x: panStart.x + 20, y: panStart.y + 12, button: 'left', buttons: 0 });
     const panEnd = await evaluate(`new DOMMatrix(getComputedStyle(document.querySelector('#morph-source-preview')).transform).e`);
-    if (panStart.scale <= 1 || Math.abs(panEnd) < 1) throw new Error(`Zoom and drag must pan the source preview: ${JSON.stringify({ panStart, panEnd })}`);
+    if (panStart.scale <= 1 || panStart.draggable || Math.abs(panEnd) < 1) throw new Error(`Desktop zoom and drag must pan the source preview without starting native image dragging: ${JSON.stringify({ panStart, panEnd })}`);
     await evaluate(`document.querySelector('[data-preview-fit="source"]').click();document.querySelector('#morph-source-list .batch-remove').click()`);
     await waitFor(`document.querySelectorAll('#morph-source-list .batch-item').length===0`);
 
@@ -189,7 +189,7 @@ applicationChecks: try {
     if (await evaluate(`document.querySelectorAll('#morph-source-list .batch-item').length!==0`)) throw new Error('Animated source was accepted');
     await setInputFile('#morph-preset-file', animatedFixture);
     await waitFor(`document.querySelector('#toast').textContent.includes('动图')`);
-    if (await evaluate(`document.querySelectorAll('#morph-presets .morph-preset').length!==4`)) throw new Error('Animated reference was accepted');
+    if (await evaluate(`document.querySelectorAll('#morph-presets .morph-preset').length!==5`)) throw new Error('Animated reference was accepted');
 
     const sources = [fileURLToPath(new URL('./fixtures/static/1.jpg', import.meta.url)), fileURLToPath(new URL('./fixtures/static/2.jpg', import.meta.url))];
     await setInputFile('#morph-source-file', sources);
@@ -198,9 +198,9 @@ applicationChecks: try {
     if (targetFit.outer.some((channel,index)=>Math.abs(channel-targetFit.nearEdge[index])>8) || targetFit.inner.every(channel => channel > 245)) throw new Error(`The reference edge color must extend seamlessly into the image frame: ${JSON.stringify(targetFit)}`);
     await evaluate(`(()=>{const input=document.querySelector('#morph-resolution');input.value='64';input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
     await setInputFile('#morph-preset-file', fileURLToPath(new URL('./fixtures/static/3.jpg', import.meta.url)));
-    await waitFor(`document.querySelectorAll('#morph-presets .morph-preset').length===5&&document.querySelector('#morph-preset-name').textContent.includes('3')&&document.querySelectorAll('#morph-presets .morph-preset.is-active[aria-checked="true"]').length===1`);
+    await waitFor(`document.querySelectorAll('#morph-presets .morph-preset').length===6&&document.querySelector('#morph-preset-name').textContent.includes('3')&&document.querySelectorAll('#morph-presets .morph-preset.is-active[aria-checked="true"]').length===1`);
     await evaluate(`document.querySelector('#morph-presets .preset-remove').click()`);
-    await waitFor(`document.querySelectorAll('#morph-presets .morph-preset').length===4`);
+    await waitFor(`document.querySelectorAll('#morph-presets .morph-preset').length===5`);
     await evaluate(`document.querySelector('#morph-generate').click()`);
     await waitFor(`document.querySelectorAll('#morph-source-list .batch-item[data-status="done"]').length===2`);
     if (!await evaluate(`!document.querySelector('#morph-generate').disabled&&document.querySelector('#morph-generate').textContent.includes('重新生成全部')`)) throw new Error('Completed morph batches must remain regeneratable');
@@ -303,7 +303,7 @@ applicationChecks: try {
   if (process.argv.includes('--phantom-only')) {
     await evaluate(`document.querySelector('.tutorial-close').click()`);
     await evaluate(`document.querySelector('[data-view="phantom"]').click()`);
-    await waitFor(`document.querySelectorAll('#phantom-presets .phantom-preset').length===6`);
+     await waitFor(`document.querySelectorAll('#phantom-presets .phantom-preset').length===7`);
     const initialSelections = await evaluate(`(()=>({page:[...document.querySelectorAll('[data-phantom-page]')].filter(button=>button.getAttribute('aria-pressed')==='true').map(button=>button.dataset.phantomPage),mode:[...document.querySelectorAll('[data-phantom-mode]')].filter(button=>button.getAttribute('aria-pressed')==='true').map(button=>button.dataset.phantomMode)}))()`);
     if (JSON.stringify(initialSelections) !== JSON.stringify({ page: ['create'], mode: ['mono'] })) throw new Error(`Phantom controls must initially select create and monochrome: ${JSON.stringify(initialSelections)}`);
     await evaluate(`document.querySelector('[data-preview="mosaic"]').click()`);
@@ -376,18 +376,18 @@ applicationChecks: try {
     await waitFor(`document.querySelector('#phantom-presets .phantom-preset[data-key="custom"][aria-pressed="true"]')&&!document.querySelector('#phantom-download').disabled`);
     if (!await evaluate(`document.querySelectorAll('#phantom-presets .phantom-preset-remove').length===1&&document.querySelector('#phantom-presets .phantom-preset[data-key="custom"]').parentElement.querySelector('.phantom-preset-remove')?.getAttribute('aria-label').includes('3.jpg')`)) throw new Error('Uploaded phantom reference must have its own accessible delete button');
     await evaluate(`document.querySelector('#phantom-presets .phantom-preset[data-key="custom"]').parentElement.querySelector('.phantom-preset-remove').click()`);
-    await waitFor(`document.querySelectorAll('#phantom-presets .phantom-preset').length===6&&!document.querySelector('#phantom-presets .phantom-preset[data-key="custom"]')&&!document.querySelector('#phantom-download').disabled`);
+    await waitFor(`document.querySelectorAll('#phantom-presets .phantom-preset').length===7&&!document.querySelector('#phantom-presets .phantom-preset[data-key="custom"]')&&!document.querySelector('#phantom-download').disabled`);
     if (!await evaluate(`document.querySelectorAll('#phantom-presets .phantom-preset[aria-pressed="true"]').length===1&&document.querySelectorAll('#phantom-presets .phantom-preset-remove').length===0`)) throw new Error('Deleting selected phantom reference must select a builtin and regenerate');
     await setInputFile('#custom-preset-file', fileURLToPath(new URL('./fixtures/static/3.jpg', import.meta.url)));
-    await waitFor(`document.querySelectorAll('.preset-option').length===7&&document.querySelectorAll('#phantom-presets .phantom-preset').length===7`);
+    await waitFor(`document.querySelectorAll('.preset-option').length===8&&document.querySelectorAll('#phantom-presets .phantom-preset').length===8`);
     await evaluate(`document.querySelector('#phantom-presets .phantom-preset-remove').parentElement.querySelector('.phantom-preset').click()`);
     await waitFor(`document.querySelector('#phantom-presets .phantom-preset[aria-pressed="true"]').parentElement.querySelector('.phantom-preset-remove')&&!document.querySelector('#phantom-download').disabled`);
     await evaluate(`document.querySelector('#phantom-presets .phantom-preset-remove').click()`);
-    await waitFor(`document.querySelectorAll('.preset-option').length===6&&document.querySelectorAll('#phantom-presets .phantom-preset').length===6&&!document.querySelector('#phantom-download').disabled`);
+    await waitFor(`document.querySelectorAll('.preset-option').length===7&&document.querySelectorAll('#phantom-presets .phantom-preset').length===7&&!document.querySelector('#phantom-download').disabled`);
     await evaluate(`document.querySelector('#toast .toast-action').click()`);
-    await waitFor(`document.querySelectorAll('.preset-option').length===7&&document.querySelectorAll('#phantom-presets .phantom-preset-remove').length===1`);
+    await waitFor(`document.querySelectorAll('.preset-option').length===8&&document.querySelectorAll('#phantom-presets .phantom-preset-remove').length===1`);
     await evaluate(`document.querySelector('#phantom-presets .phantom-preset-remove').click()`);
-    await waitFor(`document.querySelectorAll('.preset-option').length===6&&document.querySelectorAll('#phantom-presets .phantom-preset').length===6`);
+    await waitFor(`document.querySelectorAll('.preset-option').length===7&&document.querySelectorAll('#phantom-presets .phantom-preset').length===7`);
     const revealData = await evaluate(`(()=>{const canvas=document.createElement('canvas');canvas.width=canvas.height=12;const context=canvas.getContext('2d');context.fillStyle='rgba(230,40,70,.5)';context.fillRect(2,2,8,8);return canvas.toDataURL('image/png').split(',')[1]})()`);
     const revealPath = join(temporaryRoot, 'phantom-reveal-alpha.png');
     await writeFile(revealPath, Buffer.from(revealData, 'base64'));
@@ -421,14 +421,14 @@ applicationChecks: try {
     await command('Emulation.clearDeviceMetricsOverride');
     await screenshot('naiwa-phantom-desktop.png');
     const cachedPresets = await evaluate(`new Promise((resolve,reject)=>{const request=indexedDB.open('naiwa-custom-presets');request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result,version=db.version,transaction=db.transaction('builtin-presets','readonly'),records=transaction.objectStore('builtin-presets').getAll();transaction.oncomplete=()=>{resolve({version,count:records.result.length,blobs:records.result.every(record=>record.blob instanceof Blob&&record.blob.size>0),gifs:records.result.filter(record=>record.blob.type==='image/gif').length});db.close()};transaction.onerror=()=>reject(transaction.error)}})`);
-    if (cachedPresets.version !== 2 || cachedPresets.count !== 6 || !cachedPresets.blobs || cachedPresets.gifs !== 2) throw new Error(`All six builtin image files including GIFs must be cached in IndexedDB: ${JSON.stringify(cachedPresets)}`);
+    if (cachedPresets.version !== 2 || cachedPresets.count !== 7 || !cachedPresets.blobs || cachedPresets.gifs !== 2) throw new Error(`All seven builtin image files including GIFs must be cached in IndexedDB: ${JSON.stringify(cachedPresets)}`);
     trackBuiltinRequests = true;
     await command('Network.setCacheDisabled', { cacheDisabled: true });
     await command('Network.setBlockedURLs', { urls: ['*assets/images/*'] });
     await command('Page.reload', { ignoreCache: true });
-    await waitFor(`document.querySelectorAll('.preset-option').length===6&&!document.querySelector('#custom-preset-picker').disabled`);
+    await waitFor(`document.querySelectorAll('.preset-option').length===7&&!document.querySelector('#custom-preset-picker').disabled`);
     await evaluate(`document.querySelector('[data-view="phantom"]').click()`);
-    await waitFor(`document.querySelectorAll('#phantom-presets .phantom-preset').length===6&&[...document.querySelectorAll('.preset-option img, .phantom-preset img')].every(image=>image.src.startsWith('blob:')&&image.complete&&image.naturalWidth>0)`);
+    await waitFor(`document.querySelectorAll('#phantom-presets .phantom-preset').length===7&&[...document.querySelectorAll('.preset-option img, .phantom-preset img')].every(image=>image.src.startsWith('blob:')&&image.complete&&image.naturalWidth>0)`);
     if (builtinImageRequests.length) throw new Error(`Cached builtin references must load without image network requests: ${JSON.stringify(builtinImageRequests)}`);
     if (!await evaluate(`document.querySelectorAll('#phantom-presets .phantom-preset-remove').length===0&&document.querySelector('[data-phantom-mode="mono"]').getAttribute('aria-pressed')==='true'`)) throw new Error('Deleted references reappeared or default mode changed after reload');
     if (pageErrors.length) throw new Error(`Phantom runtime errors: ${pageErrors.join(' | ')}`);
@@ -514,7 +514,7 @@ applicationChecks: try {
   await evaluate(`document.querySelector('.tutorial-next').click()`);
   await waitFor(`localStorage.getItem('naiwa-tutorial-v1-advanced')==='1'&&document.querySelector('.tutorial').hidden`);
   await command('Page.reload', { ignoreCache: true });
-  await waitFor(`document.querySelectorAll('.preset-option').length===6&&!document.querySelector('#custom-preset-picker').disabled`);
+  await waitFor(`document.querySelectorAll('.preset-option').length===7&&!document.querySelector('#custom-preset-picker').disabled`);
   finishedDownloads.length = 0;
   if (!await evaluate(`document.querySelector('.tutorial').hidden`)) throw new Error('Completed tutorials returned after reload');
   await evaluate(`document.querySelector('[data-view="join"]').click()`);
@@ -749,23 +749,23 @@ applicationChecks: try {
   await waitFor('document.querySelector("#source-preview").width === 1638 && document.querySelector("#source-preview").height === 1024');
   const customPath = await makeFixture('custom-transparent.png', 128, 128, true);
   await setInputFile('#custom-preset-file', customPath);
-   await waitFor('document.querySelectorAll(".preset-option").length === 7 && document.querySelectorAll(".preset-option")[6].getAttribute("aria-checked") === "true"');
+   await waitFor('document.querySelectorAll(".preset-option").length === 8 && document.querySelectorAll(".preset-option")[7].getAttribute("aria-checked") === "true"');
   await evaluate('document.querySelector("#encode-button").click()');
   await waitFor('document.querySelector("#result-summary").textContent.includes("还原验证通过")', 180000);
   const transparentPadding = await evaluate('document.querySelector("#target-preview").getContext("2d").getImageData(0,0,1,1).data[3]');
   if (transparentPadding !== 0) throw new Error('Preset padding must retain transparent alpha');
   await setInputFile('#custom-preset-file', customPath);
   await waitFor('document.querySelector("#toast").textContent.includes("已经在")');
-   if (await evaluate('document.querySelectorAll(".preset-option").length') !== 7) throw new Error('Duplicate preset was saved twice');
+   if (await evaluate('document.querySelectorAll(".preset-option").length') !== 8) throw new Error('Duplicate preset was saved twice');
   await command('Page.reload', { ignoreCache: true });
-   await waitFor('document.querySelectorAll(".preset-option").length === 7 && !document.querySelector("#custom-preset-picker").disabled && document.querySelectorAll(".preset-option")[6].getAttribute("aria-checked") === "true"');
+    await waitFor('document.querySelectorAll(".preset-option").length === 8 && !document.querySelector("#custom-preset-picker").disabled && document.querySelectorAll(".preset-option")[7].getAttribute("aria-checked") === "true"');
   if (!await evaluate(`document.querySelector('#custom-preset-hint').textContent.includes('已保存在')`)) throw new Error('Custom preset was not restored from local storage');
   await evaluate('document.querySelector(".preset-remove").click()');
-   await waitFor('document.querySelectorAll(".preset-option").length === 6 && document.querySelector(".toast-action")');
+    await waitFor('document.querySelectorAll(".preset-option").length === 7 && document.querySelector(".toast-action")');
   await evaluate('document.querySelector(".toast-action").click()');
-   await waitFor('document.querySelectorAll(".preset-option").length === 7 && document.querySelectorAll(".preset-option")[6].getAttribute("aria-checked") === "true"');
+    await waitFor('document.querySelectorAll(".preset-option").length === 8 && document.querySelectorAll(".preset-option")[7].getAttribute("aria-checked") === "true"');
   await command('Page.reload', { ignoreCache: true });
-   await waitFor('document.querySelectorAll(".preset-option").length === 7 && !document.querySelector("#custom-preset-picker").disabled');
+    await waitFor('document.querySelectorAll(".preset-option").length === 8 && !document.querySelector("#custom-preset-picker").disabled');
   console.log('preset persistence passed: saved, deduplicated, restored after reload, removed, undo saved and survived another reload');
   await setInputFile('#source-file', smallPath);
   await waitFor('document.querySelector("#source-preview").width === 1638');
@@ -799,7 +799,7 @@ applicationChecks: try {
   if (!await evaluate('document.querySelector("#decode-preview").width === 1280 && document.querySelector("#decode-preview").height === 800')) throw new Error('4x carrier restored to the wrong source dimensions');
   console.log('4px / 4x JPG download and automatic restoration passed: 5120x3200 -> 1280x800');
   await command('Page.reload', { ignoreCache: true });
-   await waitFor('document.querySelectorAll(".preset-option").length === 7 && !document.querySelector("#custom-preset-picker").disabled');
+    await waitFor('document.querySelectorAll(".preset-option").length === 8 && !document.querySelector("#custom-preset-picker").disabled');
   const panoramaPath = await makeFixture('panorama-source.png', 1200, 160);
   await setInputFile('#source-file', panoramaPath);
   await waitFor('document.querySelector("#source-preview").width === 2960 && document.querySelector("#source-preview").height === 395');
@@ -808,9 +808,9 @@ applicationChecks: try {
   await screenshot('naiwa-browser-panorama.png');
   console.log(`sizing and custom presets passed: large 4000x2000 -> 2960x1480; manual 50% -> 2000x1000; small 160x100 -> 1638x1024; panorama 1200x160 -> 2960x395, 7 panels, final JPG restored; padding alpha=${transparentPadding}`);
   await evaluate('document.querySelector(".preset-remove").click()');
-   await waitFor('document.querySelectorAll(".preset-option").length === 6');
+    await waitFor('document.querySelectorAll(".preset-option").length === 7');
   await command('Page.reload', { ignoreCache: true });
-   await waitFor('document.querySelectorAll(".preset-option").length === 6 && !document.querySelector("#custom-preset-picker").disabled');
+    await waitFor('document.querySelectorAll(".preset-option").length === 7 && !document.querySelector("#custom-preset-picker").disabled');
   if (await evaluate('document.querySelectorAll(".preset-remove").length')) throw new Error('Deleted preset returned after reload');
   console.log('permanent preset deletion passed after reload');
 
@@ -1021,7 +1021,7 @@ applicationChecks: try {
     await screenshot('naiwa-report-compare.png');
   }
   await command('Page.reload', { ignoreCache: true });
-  await waitFor('document.querySelectorAll(".preset-option").length === 6 && !document.querySelector("#custom-preset-picker").disabled');
+   await waitFor('document.querySelectorAll(".preset-option").length === 7 && !document.querySelector("#custom-preset-picker").disabled');
   await evaluate(`document.querySelector('.preset-option[data-index="0"]').click()`);
   const resetStaticDefaults = await evaluate(`({balance:document.querySelector('#balance').value,tileSize:document.querySelector('#tile-size').value})`);
   if (resetStaticDefaults.balance !== '50' || resetStaticDefaults.tileSize !== '8') throw new Error(`Reloaded static defaults are incorrect: ${JSON.stringify(resetStaticDefaults)}`);

@@ -18,6 +18,7 @@ const PRESETS = [
   { name: '奶鼠', src: './assets/images/static/naishu.png' },
   { name: '奶狗', src: './assets/images/static/naigou.png' },
   { name: '奶蛋', src: './assets/images/static/naidan.png' },
+  { name: 'Kobe', src: './assets/images/static/kobe.png' },
   { name: '奶蛙翻滚笑', src: './assets/images/animated/1.gif', animated: true },
   { name: '奶蛙的救赎', src: './assets/images/animated/2.gif', animated: true },
 ];

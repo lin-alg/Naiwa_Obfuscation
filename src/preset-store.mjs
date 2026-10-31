@@ -45,7 +45,7 @@ export function deletePreset(id) {
 }
 
 // Bump this version when the bundled reference images change.
-const BUILTIN_PRESET_VERSION = 1;
+const BUILTIN_PRESET_VERSION = 2;
 
 export async function loadBuiltinPreset(src) {
   const url = new URL(src, document.baseURI).href;
