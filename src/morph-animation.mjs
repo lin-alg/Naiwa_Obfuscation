@@ -10,8 +10,12 @@ const GRID_SIZE = 128;
 const DEFAULT_PROXIMITY_IMPORTANCE = 13;
 const OUTPUT_SIZE = 400;
 const PERSONAL_SPACE = 0.95;
+const PERSONAL_SPACE_SQUARED = PERSONAL_SPACE * PERSONAL_SPACE;
 const ALIGNMENT_FACTOR = 0.8;
 const asText = bytes => new TextDecoder('ascii').decode(bytes);
+export const displayProgress = fraction => fraction < 0.6
+  ? 0.6 * Math.sqrt(fraction / 0.6)
+  : 0.6 + 0.4 * ((fraction - 0.6) / 0.4) ** 1.6;
 
 export function isAnimatedRaster(bytes) {
   if (bytes.length >= 6 && /^GIF8[79]a$/.test(asText(bytes.subarray(0, 6)))) return true;
@@ -123,7 +127,7 @@ export function squarePixels(source, side, crop = {}, aspect = undefined, extend
   return pixels;
 }
 
-export async function assignTargetPixels(source, target, side = GRID_SIZE, { weights, proximityImportance = DEFAULT_PROXIMITY_IMPORTANCE, onProgress } = {}) {
+export async function assignTargetPixels(source, target, side = GRID_SIZE, { weights, proximityImportance = DEFAULT_PROXIMITY_IMPORTANCE, onProgress, yieldControl = () => new Promise(resolve => setTimeout(resolve, 0)) } = {}) {
   const count = side * side;
   if (!Number.isInteger(side) || side < 1 || source?.data?.length !== count * 4 || target?.data?.length !== count * 4 || (weights && weights.length !== count)) {
     throw new TypeError('像素匹配需要尺寸相同的正方形 RGBA 图像。');
@@ -131,6 +135,15 @@ export async function assignTargetPixels(source, target, side = GRID_SIZE, { wei
   if (!Number.isFinite(proximityImportance) || proximityImportance < 0) throw new RangeError('邻近权重必须是非负有限数值。');
   const targetSources = Uint32Array.from({ length: count }, (_, index) => index);
   const mapping = new Uint32Array(count);
+  const columns = Uint16Array.from({ length: count }, (_, index) => index % side);
+  const rows = Uint16Array.from({ length: count }, (_, index) => Math.floor(index / side));
+  let uniformWeight = weights ? weights[0] : 255;
+  let hasUniformWeight = true;
+  if (weights) {
+    for (let index = 1; index < count; index += 1) {
+      if (weights[index] !== uniformWeight) { hasUniformWeight = false; break; }
+    }
+  }
   let seed = 0;
   for (let offset = 0; offset < Math.min(source.data.length, 512); offset += 7) seed = Math.imul(seed ^ source.data[offset], 16777619);
   for (let offset = 0; offset < Math.min(target.data.length, 512); offset += 11) seed = Math.imul(seed ^ target.data[offset], 16777619);
@@ -152,9 +165,36 @@ export async function assignTargetPixels(source, target, side = GRID_SIZE, { wei
     if (targetA === targetB) return false;
     const sourceA = targetSources[targetA];
     const sourceB = targetSources[targetB];
-    const before = assignmentCost(sourceA, targetA) + assignmentCost(sourceB, targetB);
-    const after = assignmentCost(sourceA, targetB) + assignmentCost(sourceB, targetA);
-    if (after >= before) return false;
+    let improves;
+    if (hasUniformWeight) {
+      const dxAA = columns[sourceA] - columns[targetA];
+      const dyAA = rows[sourceA] - rows[targetA];
+      const dxBB = columns[sourceB] - columns[targetB];
+      const dyBB = rows[sourceB] - rows[targetB];
+      const dxAB = columns[sourceA] - columns[targetB];
+      const dyAB = rows[sourceA] - rows[targetB];
+      const dxBA = columns[sourceB] - columns[targetA];
+      const dyBA = rows[sourceB] - rows[targetA];
+      const beforeSpatial = ((dxAA * dxAA + dyAA * dyAA) * proximityImportance) ** 2
+        + ((dxBB * dxBB + dyBB * dyBB) * proximityImportance) ** 2;
+      const afterSpatial = ((dxAB * dxAB + dyAB * dyAB) * proximityImportance) ** 2
+        + ((dxBA * dxBA + dyBA * dyBA) * proximityImportance) ** 2;
+      const sourceOffsetA = sourceA * 4;
+      const sourceOffsetB = sourceB * 4;
+      const targetOffsetA = targetA * 4;
+      const targetOffsetB = targetB * 4;
+      const colorDelta = 2 * uniformWeight * (
+        (source.data[sourceOffsetA] - source.data[sourceOffsetB]) * (target.data[targetOffsetA] - target.data[targetOffsetB])
+        + (source.data[sourceOffsetA + 1] - source.data[sourceOffsetB + 1]) * (target.data[targetOffsetA + 1] - target.data[targetOffsetB + 1])
+        + (source.data[sourceOffsetA + 2] - source.data[sourceOffsetB + 2]) * (target.data[targetOffsetA + 2] - target.data[targetOffsetB + 2])
+      );
+      improves = colorDelta + afterSpatial - beforeSpatial < 0;
+    } else {
+      const before = assignmentCost(sourceA, targetA) + assignmentCost(sourceB, targetB);
+      const after = assignmentCost(sourceA, targetB) + assignmentCost(sourceB, targetA);
+      improves = after < before;
+    }
+    if (!improves) return false;
     targetSources[targetA] = sourceB;
     targetSources[targetB] = sourceA;
     return true;
@@ -186,7 +226,7 @@ export async function assignTargetPixels(source, target, side = GRID_SIZE, { wei
       trySwap(targetA, by * side + bx);
     }
     onProgress?.((generation + 1) / totalGenerations);
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await yieldControl();
   }
 
   for (let targetIndex = 0; targetIndex < count; targetIndex += 1) mapping[targetSources[targetIndex]] = targetIndex;
@@ -338,7 +378,7 @@ export function updateMorphSimulation(positions, velocities, destinations, ages,
   const count = ages.length;
   const pixelScale = OUTPUT_SIZE / side;
   acceleration.fill(0);
-  for (const bin of bins) bin.length = 0;
+  for (let index = 0; index < bins.length; index += 1) bins[index].length = 0;
   for (let index = 0; index < count; index += 1) {
     const x = positions[index * 2];
     const y = positions[index * 2 + 1];
@@ -354,7 +394,7 @@ export function updateMorphSimulation(positions, velocities, destinations, ages,
 
     const dx = destinations[index * 2] - x;
     const dy = destinations[index * 2 + 1] - y;
-    const distance = Math.hypot(dx, dy);
+    const distance = Math.sqrt(dx * dx + dy * dy);
     const force = destinationForce(ages[index]);
     acceleration[index * 2] += dx * distance * force / side;
     acceleration[index * 2 + 1] += dy * distance * force / side;
@@ -370,12 +410,14 @@ export function updateMorphSimulation(positions, velocities, destinations, ages,
     let totalWeight = 0;
     for (let neighborY = Math.max(0, row - 1); neighborY <= Math.min(side - 1, row + 1); neighborY += 1) {
       for (let neighborX = Math.max(0, column - 1); neighborX <= Math.min(side - 1, column + 1); neighborX += 1) {
-        for (const other of bins[neighborY * side + neighborX]) {
+        const neighborBin = bins[neighborY * side + neighborX];
+        for (let neighborIndex = 0; neighborIndex < neighborBin.length; neighborIndex += 1) {
+          const other = neighborBin[neighborIndex];
           if (other === index) continue;
           const dx = positions[other * 2] - x;
           const dy = positions[other * 2 + 1] - y;
-          const distance = Math.hypot(dx, dy);
-          if (distance < 1e-6) {
+          const distanceSquared = dx * dx + dy * dy;
+          if (distanceSquared < 1e-12) {
             const low = Math.min(index, other);
             const high = Math.max(index, other);
             let hash = Math.imul(low + 1, 0x9e3779b1) ^ Math.imul(high + 1, 0x85ebca6b);
@@ -386,7 +428,8 @@ export function updateMorphSimulation(positions, velocities, destinations, ages,
             acceleration[index * 2 + 1] += Math.sin(angle) * direction * 0.1 / pixelScale;
             continue;
           }
-          if (distance >= PERSONAL_SPACE) continue;
+          if (distanceSquared >= PERSONAL_SPACE_SQUARED) continue;
+          const distance = Math.sqrt(distanceSquared);
           const weight = (PERSONAL_SPACE - distance) / (PERSONAL_SPACE * distance);
           acceleration[index * 2] -= dx * weight * 0.2 / pixelScale;
           acceleration[index * 2 + 1] -= dy * weight * 0.2 / pixelScale;
@@ -420,7 +463,10 @@ function createMorphFrameRenderer(colors, side, rasterSide = side * 2, outputWid
   const owners = [new Int32Array(pixelCount), new Int32Array(pixelCount)];
   const output = new Uint8Array(outputWidth * outputHeight);
   const samplePosition = Float32Array.from({ length: rasterSide }, (_, index) => (index + 0.5) * side / rasterSide);
-  const initialStep = Math.max(1, 2 ** Math.floor(Math.log2(rasterSide - 1)));
+  // Dense particle grids need only local jumps; sparse render calls need global propagation.
+  const seedSpacing = rasterSide / side;
+  const maxJump = colors.length >= side * side ? Math.ceil(seedSpacing) : rasterSide - 1;
+  const initialStep = Math.max(1, 2 ** Math.floor(Math.log2(maxJump)));
   const visibleFrame = frameRect(side, aspect);
 
   return positions => {
@@ -479,10 +525,11 @@ export function renderMorphFrame(positions, colors, side, rasterSide = side * 2,
   return createMorphFrameRenderer(colors, side, rasterSide, outputWidth, outputHeight, aspect)(positions);
 }
 
-async function createMorphGif(source, target, side, aspect, width, height, settings, onProgress) {
+export async function createMorphGif(source, target, side, aspect, width, height, settings, onProgress, yieldControl = () => new Promise(resolve => setTimeout(resolve, 0))) {
   const mapping = await assignTargetPixels(source, target, side, {
     proximityImportance: settings.proximityImportance * (GRID_SIZE / side) ** 2,
     onProgress: progress => onProgress?.(progress * 0.05),
+    yieldControl,
   });
   const rasterSide = Math.max(side, Math.round(OUTPUT_SIZE * side / GRID_SIZE));
   const { palette, indices: colors } = buildSourcePalette(source);
@@ -508,7 +555,7 @@ async function createMorphGif(source, target, side, aspect, width, height, setti
       width, height, delay: FRAME_DELAY, minimum: 8, disposal: 2,
     }));
     onProgress?.(0.05 + 0.95 * (frame + 1) / FRAMES);
-    await new Promise(resolve => setTimeout(resolve, 0));
+    await yieldControl();
   }
   blocks.push(Uint8Array.of(0x3b));
   return new Blob([concatBytes(blocks)], { type: 'image/gif' });
@@ -542,6 +589,8 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     resultFooter: $('#morph-result-footer'), resultMessage: $('#morph-result-message'),
   };
   const state = { entries: [], activeId: null, presets: [], presetKey: null, busy: false };
+  let morphWorker;
+  let morphRequest;
   const activeEntry = () => state.entries.find(entry => entry.id === state.activeId) ?? null;
   const activePreset = () => state.presets.find(preset => preset.key === state.presetKey) ?? null;
   const ready = entry => Boolean(entry && entry.status === 'done' && entry.result);
@@ -549,6 +598,40 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     { key: 'source', viewport: elements.sourceViewport, image: elements.sourcePreview },
     { key: 'output', viewport: elements.outputViewport, image: elements.outputPreview },
   ];
+
+  function generateInWorker(source, target, side, aspect, width, height, settings, onProgress) {
+    morphWorker ??= new Worker(new URL('./morph-worker.mjs', import.meta.url), { type: 'module' });
+    return new Promise((resolve, reject) => {
+      const id = createId();
+      morphRequest = { id, resolve, reject, onProgress };
+      morphWorker.onmessage = ({ data }) => {
+        if (data.id !== morphRequest?.id) return;
+        if (data.type === 'progress') morphRequest.onProgress?.(data.fraction);
+        else {
+          const request = morphRequest;
+          morphRequest = null;
+          if (data.type === 'error') request.reject(new Error(data.message));
+          else request.resolve(data.result);
+        }
+      };
+      morphWorker.onerror = event => {
+        const request = morphRequest;
+        morphRequest = null;
+        morphWorker.terminate();
+        morphWorker = null;
+        request?.reject(new Error(event.message || '动图处理线程失败。'));
+      };
+      try {
+        morphWorker.postMessage({
+          id, source: source.data.buffer, target: target.data.buffer,
+          side, aspect, width, height, settings,
+        }, [source.data.buffer, target.data.buffer]);
+      } catch (error) {
+        morphRequest = null;
+        reject(error);
+      }
+    });
+  }
 
   function updatePreview(view) {
     const { scale } = view;
@@ -645,6 +728,8 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
         updateCropPreview('target');
       }
     });
+    view.image.draggable = false;
+    view.image.addEventListener('dragstart', event => event.preventDefault());
     view.controls.addEventListener('click', event => {
       const button = event.target.closest('button');
       if (!button) return;
@@ -980,12 +1065,11 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
       if (direction === 'reverse') [source, target] = [target, source];
       entry.label = '正在计算网格迁移…';
       syncActions();
-      await new Promise(resolve => requestAnimationFrame(resolve));
-      const result = await createMorphGif(source, target, side, aspect, width, height, {
+      const result = await generateInWorker(source, target, side, aspect, width, height, {
         proximityImportance: Number(elements.proximity.value),
       }, fraction => {
-        entry.progress = fraction;
-        entry.label = `正在生成 GIF · ${Math.round(fraction * 100)}%`;
+        entry.progress = displayProgress(fraction);
+        entry.label = `正在生成 GIF · ${Math.round(entry.progress * 100)}%`;
         setStatus(entry.label);
         renderActive();
       });

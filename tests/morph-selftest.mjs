@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from 'node:assert/strict';
-import { assignTargetPixels, buildSourcePalette, destinationForce, isAnimatedRaster, outputDimensions, renderMorphFrame, updateMorphSimulation } from '../src/morph-animation.mjs';
+import { assignTargetPixels, buildSourcePalette, destinationForce, displayProgress, isAnimatedRaster, outputDimensions, renderMorphFrame, updateMorphSimulation } from '../src/morph-animation.mjs';
 
 const image = colors => ({
   width: 2,
@@ -21,6 +21,9 @@ assert.equal((await assignTargetPixels(source, target, 2, { proximityImportance:
 await assert.rejects(assignTargetPixels(source, target, 2, { proximityImportance: -1 }), /邻近权重/);
 assert.deepEqual(outputDimensions(1600, 900), { width: 400, height: 225 }, 'landscape output preserves its source aspect ratio');
 assert.deepEqual(outputDimensions(900, 1600), { width: 225, height: 400 }, 'portrait output preserves its source aspect ratio');
+assert.ok(displayProgress(0.2) > 0.2, 'the progress display moves ahead early');
+assert.equal(displayProgress(0.6), 0.6, 'the progress display reaches its slow phase at 60%');
+assert.ok(displayProgress(0.8) < 0.8, 'the progress display advances slowly beyond 60%');
 
 assert.equal(destinationForce(0), 0, 'destination pull begins at zero');
 assert.equal(destinationForce(120), destinationForce(60) * 8, 'destination pull follows Obamify’s cubic acceleration curve');
