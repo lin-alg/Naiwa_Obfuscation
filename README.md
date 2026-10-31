@@ -1,6 +1,6 @@
 # 奶蛙混淆
 
-本地浏览器图片混淆、还原与幻影坦克工具，支持黑白/彩色幻影、手动亮度对比度调整和已有透明幻影图显形。幻影坦克默认使用 Mirage_Cloak 的固定成像映射，不会自动搜索或改动源图参数。静态图、GIF、纠错、幻影坦克和 ZIP 均在本机处理；应用使用原生 ES 模块，无构建步骤或第三方前端依赖。
+本地浏览器图片混淆、还原、幻影坦克和网格迁移动图工具，支持黑白/彩色幻影、手动亮度对比度调整和已有透明幻影图显形。幻影坦克默认使用 Mirage_Cloak 的固定成像映射，不会自动搜索或改动源图参数。图像、GIF、纠错、幻影坦克和 ZIP 均在本机处理；应用使用原生 ES 模块，无构建步骤或第三方前端依赖。
 
 ## 运行
 
@@ -24,17 +24,22 @@ python -m http.server 4173
 | `docs/` | 使用指南、架构说明、开发说明和性能记录 |
 | `reports/` | 本地评测生成的报告输出 |
 
-页面通过 `src/app.mjs` 组织界面和任务；混淆与还原由 `src/engine-worker.mjs` 在 Worker 中执行，幻影坦克算法位于 `src/phantom-tank.mjs`。生成、还原和 GIF 处理流程见[架构说明](docs/architecture.md)。
+页面通过 `src/app.mjs` 组织界面和任务；混淆与还原由 `src/engine-worker.mjs` 在 Worker 中执行，幻影坦克算法位于 `src/phantom-tank.mjs`，像素迁移动图位于 `src/morph-animation.mjs`。生成、还原和 GIF 处理流程见[架构说明](docs/architecture.md)。
 
 ## 算法来源
 
 幻影坦克的像素合成公式参考并改写自 [TankFactory/Mirage_Cloak](https://github.com/TankFactory/Mirage_Cloak) 的 v4 黑白与 v5 彩色实现；本项目于 2026-10-28 适配修改。上游以 GPL-3.0 发布，源码位于 [GitHub 项目页](https://github.com/TankFactory/Mirage_Cloak)。
+
+奶蛙动图的可调裁切、像素匹配、运动模拟、400 × 400 输出和 NeuQuant 调色板参照 [Obamify](https://github.com/Spu7Nix/obamify) 的 `morph_sim.rs`、`calculate/mod.rs` 和 `gif_recorder.rs`；本站以原生 JavaScript 独立实现最近粒子区域渲染，不依赖其 Rust/WASM 技术栈。
+
+NeuQuant 量化算法参考 [image-rs/color_quant](https://github.com/image-rs/color_quant)，其 MIT 许可声明见[第三方许可](THIRD_PARTY_NOTICES.md)。
 
 ## 验证
 
 ```powershell
 node tests/selftest.mjs
 node tests/gif-selftest.mjs
+node tests/morph-selftest.mjs
 ```
 
 更多兼容性、浏览器和性能测试命令见[开发与测试](docs/development.md)。测试与评测采用的指标和已验证性能见[性能记录](docs/PERFORMANCE.md)。

@@ -319,6 +319,84 @@ input[type="range"] { width: 100%; height: 18px; margin: 4px 0 0; accent-color: 
 .phantom-reveal-stage[data-light="off"] .empty-state strong { color: #f0f1e9; }
 .phantom-reveal-stage.is-dragging { outline: 2px solid var(--accent-strong); outline-offset: -4px; }
 
+.morph-layout { min-height: 540px; display: grid; grid-template-columns: 320px minmax(0, 1fr); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; box-shadow: 0 8px 30px #493d0908; }
+.morph-controls { min-height: 0; max-height: none; overflow: auto; border-right: 1px solid var(--line); }
+.morph-controls .control-section { padding-bottom: 14px; margin-bottom: 13px; }
+.morph-controls .section-heading { margin-bottom: 9px; }
+.morph-controls .control-section.is-drop-active .upload-zone { color: var(--accent-ink); background: var(--accent-wash); border-color: var(--accent-strong); box-shadow: inset 0 0 0 1px var(--accent-strong); }
+.morph-presets { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.morph-preset img { aspect-ratio: 1.25; }
+.morph-preset[aria-checked="true"] { color: var(--accent-ink); border-color: var(--accent-strong); background: #fffbe7; box-shadow: inset 0 0 0 1px var(--accent-strong), 0 2px 8px #493d0918; }
+.morph-preset[aria-checked="true"] span { color: var(--accent-ink); font-weight: 700; }
+.morph-crop { display: grid; grid-template-columns: 88px minmax(0, 1fr); align-items: center; gap: 6px 10px; margin-top: 8px; padding: 7px; background: #faf9f2; border: 1px solid var(--line); border-radius: 4px; }
+.morph-crop summary { grid-column: 1 / -1; color: #5d5946; cursor: pointer; font-size: 10px; font-weight: 650; }
+.morph-crop-preview { width: 88px; height: 88px; display: block; grid-column: 1; grid-row: span 3; object-fit: cover; background: #fff; border: 1px solid var(--line); image-rendering: auto; }
+.morph-crop label { min-width: 0; display: grid; gap: 1px; color: var(--muted); font-size: 9px; }
+.morph-crop label span { display: flex; justify-content: space-between; gap: 6px; }
+.morph-crop output { color: var(--accent-ink); font-variant-numeric: tabular-nums; }
+.morph-crop input[type="range"] { width: 100%; height: 14px; margin: 0; accent-color: var(--accent-strong); }
+.morph-crop > button { grid-column: 2; min-height: 27px; justify-self: end; padding: 3px 9px; font-size: 9px; }
+.morph-actions { margin-top: auto; }
+.morph-actions > .primary-button { width: 100%; min-height: 42px; }
+.morph-actions .field-hint { min-height: 32px; overflow-wrap: anywhere; }
+.morph-result { min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 16px; }
+.morph-preview-grid { min-height: 0; flex: 1 1 auto; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.morph-preview-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; margin: 0; }
+.morph-preview-panel figcaption { min-height: 30px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 5px 8px; color: #4f5a52; font-size: 11px; }
+.morph-preview-panel figcaption span:last-child { color: #89938b; font-size: 10px; font-variant-numeric: tabular-nums; }
+.morph-preview-controls { flex: 0 0 auto; display: flex; align-items: center; gap: 2px; margin-left: auto; padding: 2px; background: #faf8ed; border: 1px solid var(--line); border-radius: 4px; }
+.morph-preview-controls button { width: 24px; min-width: 24px; height: 23px; padding: 0; color: #5f592f; background: transparent; border: 0; border-radius: 2px; cursor: pointer; font-size: 14px; line-height: 1; }
+.morph-preview-controls button:hover:not(:disabled) { color: var(--accent-ink); background: #fff0a0; }
+.morph-preview-controls button:disabled { color: #b1ae9e; cursor: default; }
+.morph-preview-controls button[data-preview-fit] { width: 40px; min-width: 40px; font-size: 10px; }
+.morph-preview-controls output { min-width: 36px; color: #77704e; font-size: 9px; text-align: center; font-variant-numeric: tabular-nums; }
+.morph-image-frame { position: relative; min-height: 260px; flex: 1 1 auto; overflow: hidden; background-color: #f0eedf; background-image: linear-gradient(45deg, #e8e5d2 25%, transparent 25%), linear-gradient(-45deg, #e8e5d2 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #e8e5d2 75%), linear-gradient(-45deg, transparent 75%, #e8e5d2 75%); background-position: 0 0, 0 8px, 8px -8px, -8px 0; background-size: 16px 16px; border: 1px solid #e1ddc8; border-radius: 3px; }
+.morph-preview-viewport { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; touch-action: pan-y; cursor: zoom-in; user-select: none; }
+.morph-preview-viewport.is-zoomed { cursor: grab; }
+.morph-preview-viewport.is-panning { cursor: grabbing; }
+.morph-image-frame img { width: auto; height: auto; max-width: min(100%, 512px); max-height: 100%; min-width: 0; min-height: 0; display: block; object-fit: contain; image-rendering: pixelated; transform: translate3d(var(--preview-pan-x, 0px), var(--preview-pan-y, 0px), 0) scale(var(--preview-scale, 1)); transform-origin: center; }
+.morph-image-frame .empty-state { z-index: 1; }
+.morph-result .phantom-result-footer { flex: 0 0 auto; }
+.morph-actions .field-hint.is-error { color: #a3432e; }
+
+@media (min-width: 641px) {
+  #morph-view { height: calc(100dvh - 192px); min-height: 0; flex: 0 0 auto; overflow: hidden; }
+  #morph-view .workspace-heading { height: auto; min-height: 52px; flex-shrink: 0; margin-bottom: 8px; }
+  #morph-view .morph-layout { min-height: 0; grid-template-rows: minmax(0, 1fr); flex: 1 1 auto; }
+  #morph-view .morph-controls { min-height: 0; overflow: auto; padding: 8px; scrollbar-width: thin; }
+  #morph-view .morph-controls .control-section { padding-bottom: 9px; margin-bottom: 8px; }
+  #morph-view .morph-controls .upload-zone { min-height: 50px; }
+  #morph-view .morph-crop { grid-template-columns: 64px minmax(0, 1fr); gap: 4px 8px; padding: 6px; }
+  #morph-view .morph-crop-preview { width: 64px; height: 64px; }
+  #morph-view .morph-result { min-height: 0; }
+  #morph-view .morph-preview-grid, #morph-view .morph-image-frame { min-height: 0; }
+}
+
+@media (max-width: 640px) {
+  .morph-layout { min-height: 0; display: flex; flex-direction: column; overflow: visible; }
+  .morph-controls { width: 100%; min-width: 0; max-height: none; overflow: visible; padding: 8px; border-right: 0; border-bottom: 1px solid var(--line); }
+  .morph-controls .control-section { width: 100%; }
+  .morph-presets { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .morph-crop { grid-template-columns: 72px minmax(0, 1fr); }
+  .morph-crop-preview { width: 72px; height: 72px; }
+  .morph-result { min-height: 72vh; padding: 12px; }
+  .morph-preview-grid { display: flex; flex-direction: column; gap: 9px; }
+  .morph-image-frame { height: min(78vw, 350px); min-height: 0; flex: 0 0 auto; }
+  .morph-preview-panel:first-child .morph-image-frame { height: min(48vw, 240px); min-height: 0; }
+}
+
+@media (min-width: 641px) and (max-width: 900px) {
+  #morph-view { height: calc(100dvh - 188px); }
+  .morph-layout { grid-template-columns: minmax(230px, .85fr) minmax(0, 1.4fr); }
+  .morph-controls { padding: 9px; }
+  .morph-presets { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .morph-result { padding: 12px; }
+}
+
+@media (min-width: 1180px) {
+  #morph-view { height: calc(100dvh - 200px); }
+}
+
 .community-panel { width: min(920px, 100%); min-height: 310px; display: grid; grid-template-columns: minmax(220px, 30%) minmax(0, 1fr); margin: auto; overflow: hidden; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 30px #493d0908; }
 .community-brand { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 13px; padding: 28px; color: #66734d; background: #f2f6e8; border-right: 1px solid #e2e9d4; font-size: 10px; }
 .community-brand img { width: 104px; height: 104px; display: block; border: 4px solid white; border-radius: 14px; box-shadow: 0 3px 12px #24351718; }
@@ -511,7 +589,7 @@ input[type="range"] { width: 100%; height: 18px; margin: 4px 0 0; accent-color: 
   #phantom-view .workspace-heading { height: auto; min-height: 52px; flex-shrink: 0; margin-bottom: 8px; }
   #phantom-create-view, #phantom-reveal-view { height: 0; min-height: 0; flex: 1 1 auto; animation: none; }
   .phantom-layout { min-height: 0; grid-template-rows: minmax(0, 1fr); flex: 1 1 auto; }
-  .phantom-controls { min-height: 0; overflow: auto; padding: 8px; scrollbar-width: thin; }
+  .phantom-controls { min-height: 0; overflow: auto; padding: 7px 8px; scrollbar-width: thin; }
   .phantom-controls .control-section { padding-bottom: 9px; margin-bottom: 8px; }
   .phantom-controls .section-heading { margin-bottom: 8px; }
   .phantom-controls .upload-zone { min-height: 52px; }

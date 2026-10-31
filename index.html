@@ -28,6 +28,7 @@
       <button class="tab is-active" data-view="encode" type="button">混淆图像</button>
       <button class="tab" data-view="decode" type="button">还原图像</button>
       <button class="tab" data-view="phantom" type="button">生成幻影坦克图</button>
+      <button class="tab" data-view="morph" type="button">生成奶蛙动图</button>
       <button class="tab" data-view="join" type="button">加入奶蛙研究所</button>
     </nav>
 
@@ -336,6 +337,95 @@
         </section>
       </section>
 
+      <section id="morph-view" class="view" aria-labelledby="morph-title" hidden>
+        <div class="workspace-heading">
+          <div>
+            <div class="phantom-title-line">
+              <h1 id="morph-title">生成奶蛙动图</h1>
+              <span class="phantom-stats" aria-live="polite">奶蛙动图生成数 <strong id="morph-count">—</strong></span>
+            </div>
+            <p class="workspace-intro">选择静态原图和参考图，生成像素迁移动画 GIF。</p>
+          </div>
+        </div>
+        <div class="morph-layout">
+          <aside class="controls morph-controls">
+            <section class="control-section">
+              <div class="section-heading"><span class="step-index">01</span><h2>原图</h2></div>
+              <input id="morph-source-file" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/bmp" multiple>
+              <button class="upload-zone" id="morph-source-picker" type="button" aria-describedby="morph-source-drop-hint">
+                <span class="upload-plus" aria-hidden="true">+</span>
+                <span class="upload-copy"><strong id="morph-source-name">选择静态图片</strong><small id="morph-source-drop-hint">支持多选或拖入 JPG、PNG、WebP；不支持动图</small></span>
+              </button>
+              <div class="batch-list" id="morph-source-list" role="list" aria-label="奶蛙动图原图条目"></div>
+              <details class="morph-crop" data-morph-crop="source">
+                <summary>原图裁切</summary>
+                <canvas class="morph-crop-preview" id="morph-source-crop-preview" width="88" height="88" aria-label="原图裁切预览"></canvas>
+                <label><span>水平位置 <output data-crop-value="x">0</output></span><input data-crop-axis="x" type="range" min="-1" max="1" step="0.01" value="0" aria-label="原图水平裁切位置"></label>
+                <label><span>垂直位置 <output data-crop-value="y">0</output></span><input data-crop-axis="y" type="range" min="-1" max="1" step="0.01" value="0" aria-label="原图垂直裁切位置"></label>
+                <label><span>缩放 <output data-crop-value="zoom">100%</output></span><input data-crop-axis="zoom" type="range" min="1" max="3" step="0.01" value="1" aria-label="原图裁切缩放"></label>
+                <button class="quiet-button" type="button" data-crop-reset="source">重置裁切</button>
+              </details>
+              <p class="field-hint batch-summary" id="morph-batch-summary" role="status"></p>
+            </section>
+            <section class="control-section">
+              <div class="section-heading"><span class="step-index">02</span><h2>参考图</h2><span class="selection-label" id="morph-preset-name">奶蛙</span></div>
+              <div class="morph-presets" id="morph-presets" role="radiogroup" aria-label="静态参考图"></div>
+              <input id="morph-preset-file" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/bmp">
+              <button class="quiet-button wide-button" id="morph-preset-picker" type="button">＋ 上传自己的静态参考图</button>
+              <details class="morph-crop" data-morph-crop="target">
+                <summary>参考图裁切</summary>
+                <canvas class="morph-crop-preview" id="morph-target-crop-preview" width="88" height="88" aria-label="参考图裁切预览"></canvas>
+                <label><span>水平位置 <output data-crop-value="x">0</output></span><input data-crop-axis="x" type="range" min="-1" max="1" step="0.01" value="0" aria-label="参考图水平裁切位置"></label>
+                <label><span>垂直位置 <output data-crop-value="y">0</output></span><input data-crop-axis="y" type="range" min="-1" max="1" step="0.01" value="0" aria-label="参考图垂直裁切位置"></label>
+                <label><span>缩放 <output data-crop-value="zoom">100%</output></span><input data-crop-axis="zoom" type="range" min="1" max="3" step="0.01" value="1" aria-label="参考图裁切缩放"></label>
+                <button class="quiet-button" type="button" data-crop-reset="target">重置裁切</button>
+              </details>
+            </section>
+            <section class="control-section morph-options">
+              <div class="section-heading"><span class="step-index">03</span><h2>播放方向</h2></div>
+              <select class="text-input" id="morph-direction">
+                <option value="forward">原图 → 参考图</option>
+                <option value="reverse">逆动画：参考图 → 原图</option>
+              </select>
+            </section>
+            <div class="morph-actions">
+              <button class="primary-button" id="morph-generate" type="button" disabled>生成奶蛙动图</button>
+              <button class="quiet-button wide-button" id="morph-download" type="button" disabled>下载当前 GIF</button>
+              <button class="quiet-button wide-button" id="morph-download-all" type="button" disabled hidden>下载全部 GIF（ZIP）</button>
+              <p class="field-hint" id="morph-status" role="status" aria-live="polite">选择静态原图和参考图后即可生成。</p>
+            </div>
+          </aside>
+          <section class="morph-result" aria-label="奶蛙动图预览">
+            <div class="phantom-toolbar">
+              <div><strong>动画预览</strong><span id="morph-output-meta">等待生成</span></div>
+            </div>
+            <div class="morph-preview-grid">
+              <figure class="morph-preview-panel">
+                <figcaption><span>原图</span><span id="morph-source-meta">等待上传</span></figcaption>
+                <div class="morph-preview-controls" data-preview-controls="source" aria-label="原图预览缩放控制">
+                  <button type="button" data-preview-zoom="out" aria-label="缩小原图预览" title="缩小">−</button>
+                  <output data-preview-zoom-value="source">100%</output>
+                  <button type="button" data-preview-zoom="in" aria-label="放大原图预览" title="放大">+</button>
+                  <button type="button" data-preview-fit="source" title="适应预览框">适应</button>
+                </div>
+                <div class="morph-image-frame" data-preview-frame="source"><div class="morph-preview-viewport" id="morph-source-viewport"><img id="morph-source-preview" alt="原图预览" hidden></div><div class="empty-state" id="morph-source-empty">选择一张静态原图</div></div>
+              </figure>
+              <figure class="morph-preview-panel">
+                <figcaption><span>生成结果</span><span>GIF 动图</span></figcaption>
+                <div class="morph-preview-controls" data-preview-controls="output" aria-label="生成结果预览缩放控制">
+                  <button type="button" data-preview-zoom="out" aria-label="缩小结果预览" title="缩小">−</button>
+                  <output data-preview-zoom-value="output">100%</output>
+                  <button type="button" data-preview-zoom="in" aria-label="放大结果预览" title="放大">+</button>
+                  <button type="button" data-preview-fit="output" title="适应预览框">适应</button>
+                </div>
+                <div class="morph-image-frame" data-preview-frame="output"><div class="morph-preview-viewport" id="morph-output-viewport"><img id="morph-output-preview" alt="奶蛙动图预览" hidden></div><div class="empty-state" id="morph-output-empty"><strong>动图会显示在这里</strong><span>上传静态原图并点击生成</span></div></div>
+              </figure>
+            </div>
+            <div class="phantom-result-footer" id="morph-result-footer"><span class="result-indicator"></span><span id="morph-result-message" aria-live="polite">尚未生成</span></div>
+          </section>
+        </div>
+      </section>
+
       <section id="join-view" class="view" aria-labelledby="join-title" hidden>
         <div class="workspace-heading">
           <div>
@@ -380,7 +470,7 @@
       </article>
       <article class="policy-copy" id="privacy-copy" hidden>
         <p><strong>图片处理：</strong>你选择的原图和生成结果只在当前浏览器中处理，不会上传到任何地方。你添加的自定义参考图会保存在本机浏览器的存储中；你可以手动删除这些参考图，或者直接以清空网站数据的方式来移除。</p>
-        <p><strong>访客统计：</strong>统计默认开启。页面向 <code>bsz.iirose.cn</code> 统计接口发送访客请求，原有混淆或还原任务完成后更新“总混淆次数”；每次成功生成幻影坦克后，单独更新“召唤幻影坦克数量”。刷新页面仅读取这两项累计数量。本站使用第一方 Cookie 保存访客标识（最长一年），供统计服务去重。请求会包含页面地址及网络连接信息（例如 IP 地址和浏览器 User-Agent）；不会发送图片内容。此服务是第三方不蒜子兼容实现，并非原版官方服务。<a href="https://busuanzi.9420.ltd/usage.html" target="_blank" rel="noopener noreferrer">查看兼容服务说明</a>（服务方说明不提供 SLA）。</p>
+        <p><strong>访客统计：</strong>统计默认开启。页面向 <code>bsz.iirose.cn</code> 统计接口发送访客请求，原有混淆或还原任务完成后更新“总混淆次数”；每次成功生成幻影坦克或奶蛙动图后，分别更新各自的累计数量。刷新页面仅读取累计数量。本站使用第一方 Cookie 保存访客标识（最长一年），供统计服务去重。请求会包含页面地址及网络连接信息（例如 IP 地址和浏览器 User-Agent）；不会发送图片内容。此服务是第三方不蒜子兼容实现，并非原版官方服务。<a href="https://busuanzi.9420.ltd/usage.html" target="_blank" rel="noopener noreferrer">查看兼容服务说明</a>（服务方说明不提供 SLA）。</p>
         <p>你可以使用下方开关关闭统计；关闭后停止发送新请求并删除本站保存的访客 Cookie，不影响服务方此前收到的数据。</p>
         <label class="policy-analytics-toggle" for="analytics-toggle">
           <span>访客与图片生成次数统计</span>

@@ -9,6 +9,7 @@ import { isGif } from './gif-codec.mjs';
 import { initializeTutorial } from './guided-tour.mjs';
 import { initializeAnalytics } from './analytics.mjs';
 import { initializePhantomTank } from './phantom-tank.mjs';
+import { initializeMorphAnimation, isAnimatedRaster } from './morph-animation.mjs';
 
 const $ = selector => document.querySelector(selector);
 const PRESETS = [
@@ -96,6 +97,14 @@ const phantomTank = initializePhantomTank({
   onGenerated: () => analytics.recordPhantom(),
   onPreviewChange: action => requestAnimationFrame(() => action === 'create' ? previews.fit('#phantom-create-view .phantom-stage')
     : action === 'reveal' ? previews.fit('#phantom-reveal-view .phantom-stage') : previews.apply()),
+});
+const morphAnimation = initializeMorphAnimation({
+  getPresets: () => PRESETS.map((preset, index) => ({ key: presetKey(preset), name: preset.name, src: preset.displaySrc ?? preset.src,
+    image: state.presetImages[index], animated: preset.animatedRaster === true || preset.animated === true,
+    staticImage: preset.record?.blob.type !== 'image/svg+xml', remove: preset.filename ? () => removeCustomPreset(preset) : null })),
+  onCustomPreset: async file => { await loadCustomPreset(file); return presetKey(PRESETS[state.presetIndex]); },
+  onError: error => showToast(error.message, true),
+  onGenerated: () => analytics.recordMorph(),
 });
 
 const formatBytes = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(2)} MB` : bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
@@ -560,14 +569,16 @@ async function initializePresets() {
   state.presetImages = loaded.map(item => item.image); state.presetGifBytes = loaded.map(item => item.bytes);
   try {
     for (const record of await listPresets()) {
+      const rasterHeader = new Uint8Array(await record.blob.slice(0, Math.min(record.blob.size, 4 * 1048576)).arrayBuffer());
       const bitmap = await createImageBitmap(record.blob); const canvas = bitmapCanvas(bitmap); bitmap.close();
-      PRESETS.push({ id: record.id, name: record.name, filename: record.filename, src: URL.createObjectURL(record.blob), saved: true, record, animated: record.blob.type === 'image/gif' });
+      PRESETS.push({ id: record.id, name: record.name, filename: record.filename, src: URL.createObjectURL(record.blob), saved: true, record,
+        animated: record.blob.type === 'image/gif', animatedRaster: isAnimatedRaster(rasterHeader) });
       state.presetImages.push({ width: canvas.width, height: canvas.height, data: canvasPixels(canvas) });
       state.presetGifBytes.push(record.blob.type === 'image/gif' ? new Uint8Array(await record.blob.arrayBuffer()) : null); canvas.width = canvas.height = 0;
     }
   } catch { showToast('浏览器本地存储暂不可用，自定义参考图仍可在本次使用。'); }
   const index = PRESETS.findIndex(preset => presetKey(preset) === lastSelected); renderPresets(index < 0 ? 0 : index);
-  phantomTank.refreshPresets();
+  phantomTank.refreshPresets(); morphAnimation.refreshPresets();
   const key = presetKey(PRESETS[state.presetIndex]);
   for (const entry of state.encode) if (!entry.started) entry.settings = settingsForConversion({ ...entry.settings, preset: key }, entry.isGif, key, entry.settingsTouched);
   const initialEntry = activeEntry('encode');
@@ -582,7 +593,7 @@ async function removeCustomPreset(preset) {
   const selected = PRESETS[state.presetIndex]; const wasSelected = selected === preset;
   const [image] = state.presetImages.splice(index, 1); state.presetGifBytes.splice(index, 1); PRESETS.splice(index, 1);
   renderPresets(wasSelected ? 0 : PRESETS.indexOf(selected));
-  phantomTank.refreshPresets();
+  phantomTank.refreshPresets(); morphAnimation.refreshPresets();
   for (const entry of state.encode) if (entry.settings.preset === preset.id) {
     cancelEntry(entry); entry.settings = settingsForConversion({ ...entry.settings, preset: presetKey(PRESETS[0]) }, entry.isGif, presetKey(PRESETS[0]), entry.settingsTouched); entry.result = entry.cached = null; entry.status = 'idle'; entry.label = '参考图已删除，已切换默认参考图';
     if (entry.started) scheduleEntry(entry, 'encode', 350);
@@ -592,14 +603,15 @@ async function removeCustomPreset(preset) {
   showToast(`已删除「${preset.name}」`, false, { label: '撤销', run: async () => {
     if (preset.saved) await savePreset(preset.record);
     if (PRESETS.some(item => item.id === preset.id)) return;
-    preset.src = URL.createObjectURL(preset.record.blob); PRESETS.push(preset); state.presetImages.push(image); state.presetGifBytes.push(preset.animated ? new Uint8Array(await preset.record.blob.arrayBuffer()) : null); renderPresets(wasSelected ? PRESETS.length - 1 : state.presetIndex); phantomTank.refreshPresets();
+    preset.src = URL.createObjectURL(preset.record.blob); PRESETS.push(preset); state.presetImages.push(image); state.presetGifBytes.push(preset.animated ? new Uint8Array(await preset.record.blob.arrayBuffer()) : null); renderPresets(wasSelected ? PRESETS.length - 1 : state.presetIndex); phantomTank.refreshPresets(); morphAnimation.refreshPresets();
     if (wasSelected) settingsChanged({ presetOnly: true });
   } });
 }
 
 async function loadCustomPreset(file) {
   if (!file?.type.startsWith('image/')) throw new Error('请选择有效的参考图。');
-  const animated = isGif(new Uint8Array(await file.slice(0, 6).arrayBuffer()));
+  const rasterHeader = new Uint8Array(await file.slice(0, Math.min(file.size, 4 * 1048576)).arrayBuffer());
+  const animated = isGif(rasterHeader.subarray(0, 6));
   const bitmap = await createImageBitmap(file); const scale = Math.min(1, 1536 / Math.max(bitmap.width, bitmap.height));
   const canvas = bitmapCanvas(bitmap, Math.max(1, Math.round(bitmap.width * scale)), Math.max(1, Math.round(bitmap.height * scale))); bitmap.close();
   const image = { width: canvas.width, height: canvas.height, data: canvasPixels(canvas) }; const blob = animated ? file : await imageBlob(canvas); canvas.width = canvas.height = 0;
@@ -610,8 +622,8 @@ async function loadCustomPreset(file) {
   const record = { id, name: file.name.replace(/\.[^.]+$/, '') || '自定义参考图', filename: file.name, blob, createdAt: Date.now() };
   let saved = true;
   try { await savePreset(record); } catch { saved = false; showToast('本地保存未成功，这张参考图仍可在本次使用。', true); }
-  const preset = { id, name: record.name, filename: file.name, src: URL.createObjectURL(blob), saved, record, animated };
-  PRESETS.push(preset); state.presetImages.push(image); state.presetGifBytes.push(animated ? new Uint8Array(await blob.arrayBuffer()) : null); appendPreset(preset, PRESETS.length - 1); setPreset(PRESETS.length - 1); phantomTank.refreshPresets();
+  const preset = { id, name: record.name, filename: file.name, src: URL.createObjectURL(blob), saved, record, animated, animatedRaster: isAnimatedRaster(rasterHeader) };
+  PRESETS.push(preset); state.presetImages.push(image); state.presetGifBytes.push(animated ? new Uint8Array(await blob.arrayBuffer()) : null); appendPreset(preset, PRESETS.length - 1); setPreset(PRESETS.length - 1); phantomTank.refreshPresets(); morphAnimation.refreshPresets();
 }
 
 for (const [inputId, pickerId, kind] of [['source-file', 'source-picker', 'encode'], ['encoded-file', 'encoded-picker', 'decode']]) {
@@ -666,6 +678,7 @@ document.querySelectorAll('.tab').forEach(button => button.addEventListener('cli
   document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('is-active', tab === button));
   document.querySelectorAll('.view').forEach(section => { const active = section.id === `${button.dataset.view}-view`; section.hidden = !active; section.classList.toggle('is-visible', active); });
   document.body.classList.toggle('phantom-active', button.dataset.view === 'phantom');
+  document.body.classList.toggle('morph-active', button.dataset.view === 'morph');
   syncDesktopLayout(); requestAnimationFrame(() => previews.apply());
 }));
 initializePresets().catch(error => showToast(error.message, true));

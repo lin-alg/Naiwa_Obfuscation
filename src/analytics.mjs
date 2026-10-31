@@ -43,7 +43,8 @@ export function initializeAnalytics() {
   const visitorCount = $('#visitor-count');
   const conversionCount = $('#conversion-count');
   const phantomCount = $('#phantom-count');
-  const countElements = [visitorCount, conversionCount, phantomCount];
+  const morphCount = $('#morph-count');
+  const countElements = [visitorCount, conversionCount, phantomCount, morphCount];
   const dialog = $('#policy-dialog');
   const toggle = $('#analytics-toggle');
   const preference = getPreference();
@@ -83,6 +84,7 @@ export function initializeAnalytics() {
       enqueue(async () => updateCounts(await requestCounts(location.href, 'POST')), [visitorCount]),
       enqueue(async () => updateCounts(await requestCounts(new URL('/__naiwa_conversion__', location.origin).href, 'GET'), conversionCount), [conversionCount]),
       enqueue(async () => updateCounts(await requestCounts(new URL('/__naiwa_phantom__', location.origin).href, 'GET'), phantomCount), [phantomCount]),
+      enqueue(async () => updateCounts(await requestCounts(new URL('/__naiwa_morph__', location.origin).href, 'GET'), morphCount), [morphCount]),
     ]);
   }
 
@@ -144,6 +146,11 @@ export function initializeAnalytics() {
       if (!enabled) return;
       const phantomPage = new URL('/__naiwa_phantom__', location.origin).href;
       return enqueue(async () => updateCounts(await requestCounts(phantomPage, 'POST'), phantomCount), [phantomCount]);
+    },
+    recordMorph() {
+      if (!enabled) return;
+      const morphPage = new URL('/__naiwa_morph__', location.origin).href;
+      return enqueue(async () => updateCounts(await requestCounts(morphPage, 'POST'), morphCount), [morphCount]);
     },
   };
 }
