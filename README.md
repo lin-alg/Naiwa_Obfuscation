@@ -30,7 +30,7 @@ python -m http.server 4173
 
 幻影坦克的像素合成公式参考并改写自 [TankFactory/Mirage_Cloak](https://github.com/TankFactory/Mirage_Cloak) 的 v4 黑白与 v5 彩色实现；本项目于 2026-10-28 适配修改。上游以 GPL-3.0 发布，源码位于 [GitHub 项目页](https://github.com/TankFactory/Mirage_Cloak)。
 
-奶蛙动图的可调裁切、像素匹配、运动模拟、400 × 400 输出和 NeuQuant 调色板参照 [Obamify](https://github.com/Spu7Nix/obamify) 的 `morph_sim.rs`、`calculate/mod.rs` 和 `gif_recorder.rs`；本站以原生 JavaScript 独立实现最近粒子区域渲染，不依赖其 Rust/WASM 技术栈。
+奶蛙动图的像素匹配、运动模拟和 NeuQuant 调色板参照 [Obamify](https://github.com/Spu7Nix/obamify) 的 `morph_sim.rs`、`calculate/mod.rs` 和 `gif_recorder.rs`；本站额外提供细度与邻近权重调节、原图比例画框，GIF 长边最多 400 像素，以原生 JavaScript 实现最近粒子区域渲染，不依赖其 Rust/WASM 技术栈。
 
 NeuQuant 量化算法参考 [image-rs/color_quant](https://github.com/image-rs/color_quant)，其 MIT 许可声明见[第三方许可](THIRD_PARTY_NOTICES.md)。
 

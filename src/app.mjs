@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { createPlan } from './core.mjs';
+import { createId } from './id.mjs';
 import { carrierScale, conversionDefaults, processingSize, processingOptions } from './processing-settings.mjs';
 import { listPresets, savePreset, deletePreset, selectedPreset, loadBuiltinPreset } from './preset-store.mjs';
 import { WorkerPool } from './worker-pool.mjs';
@@ -381,7 +382,7 @@ async function importFiles(files, kind) {
   const settings = readSettings();
   const typedImages = await Promise.all(images.map(async file => ({ file, isGif: isGif(new Uint8Array(await file.slice(0, 6).arrayBuffer())) })));
   const entries = typedImages.map(({ file, isGif: animatedSource }) => ({
-    id: crypto.randomUUID(), file, isGif: animatedSource,
+    id: createId(), file, isGif: animatedSource,
     settings: settingsForConversion(settings, animatedSource, settings.preset, state.settingsTouched), settingsTouched: new Set(state.settingsTouched),
     version: 0, status: 'loading', label: '读取图像…', progress: 0, result: null, started: false,
   }));

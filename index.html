@@ -354,16 +354,16 @@
               <input id="morph-source-file" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/bmp" multiple>
               <button class="upload-zone" id="morph-source-picker" type="button" aria-describedby="morph-source-drop-hint">
                 <span class="upload-plus" aria-hidden="true">+</span>
-                <span class="upload-copy"><strong id="morph-source-name">选择静态图片</strong><small id="morph-source-drop-hint">支持多选或拖入 JPG、PNG、WebP；不支持动图</small></span>
+                <span class="upload-copy"><strong id="morph-source-name">选择静态图片</strong><small id="morph-source-drop-hint">点击或拖入图片上传；支持多选；不支持动图</small></span>
               </button>
               <div class="batch-list" id="morph-source-list" role="list" aria-label="奶蛙动图原图条目"></div>
               <details class="morph-crop" data-morph-crop="source">
-                <summary>原图裁切</summary>
+                <summary>原图取景调整</summary>
                 <canvas class="morph-crop-preview" id="morph-source-crop-preview" width="88" height="88" aria-label="原图裁切预览"></canvas>
-                <label><span>水平位置 <output data-crop-value="x">0</output></span><input data-crop-axis="x" type="range" min="-1" max="1" step="0.01" value="0" aria-label="原图水平裁切位置"></label>
-                <label><span>垂直位置 <output data-crop-value="y">0</output></span><input data-crop-axis="y" type="range" min="-1" max="1" step="0.01" value="0" aria-label="原图垂直裁切位置"></label>
-                <label><span>缩放 <output data-crop-value="zoom">100%</output></span><input data-crop-axis="zoom" type="range" min="1" max="3" step="0.01" value="1" aria-label="原图裁切缩放"></label>
-                <button class="quiet-button" type="button" data-crop-reset="source">重置裁切</button>
+                <label><span>水平位置 <output data-crop-value="x">0</output></span><input data-crop-axis="x" type="range" min="-1" max="1" step="0.01" value="0" aria-label="原图水平取景位置"></label>
+                <label><span>垂直位置 <output data-crop-value="y">0</output></span><input data-crop-axis="y" type="range" min="-1" max="1" step="0.01" value="0" aria-label="原图垂直取景位置"></label>
+                <label><span>缩放 <output data-crop-value="zoom">100%</output></span><input data-crop-axis="zoom" type="range" min="1" max="3" step="0.01" value="1" aria-label="原图取景缩放"></label>
+                <button class="quiet-button" type="button" data-crop-reset="source">重置取景</button>
               </details>
               <p class="field-hint batch-summary" id="morph-batch-summary" role="status"></p>
             </section>
@@ -373,16 +373,29 @@
               <input id="morph-preset-file" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/bmp">
               <button class="quiet-button wide-button" id="morph-preset-picker" type="button">＋ 上传自己的静态参考图</button>
               <details class="morph-crop" data-morph-crop="target">
-                <summary>参考图裁切</summary>
+                <summary>参考图取景调整</summary>
                 <canvas class="morph-crop-preview" id="morph-target-crop-preview" width="88" height="88" aria-label="参考图裁切预览"></canvas>
-                <label><span>水平位置 <output data-crop-value="x">0</output></span><input data-crop-axis="x" type="range" min="-1" max="1" step="0.01" value="0" aria-label="参考图水平裁切位置"></label>
-                <label><span>垂直位置 <output data-crop-value="y">0</output></span><input data-crop-axis="y" type="range" min="-1" max="1" step="0.01" value="0" aria-label="参考图垂直裁切位置"></label>
-                <label><span>缩放 <output data-crop-value="zoom">100%</output></span><input data-crop-axis="zoom" type="range" min="1" max="3" step="0.01" value="1" aria-label="参考图裁切缩放"></label>
-                <button class="quiet-button" type="button" data-crop-reset="target">重置裁切</button>
+                <label><span>水平位置 <output data-crop-value="x">0</output></span><input data-crop-axis="x" type="range" min="-1" max="1" step="0.01" value="0" aria-label="参考图水平取景位置"></label>
+                <label><span>垂直位置 <output data-crop-value="y">0</output></span><input data-crop-axis="y" type="range" min="-1" max="1" step="0.01" value="0" aria-label="参考图垂直取景位置"></label>
+                <label><span>缩放 <output data-crop-value="zoom">100%</output></span><input data-crop-axis="zoom" type="range" min="1" max="3" step="0.01" value="1" aria-label="参考图取景缩放"></label>
+                <button class="quiet-button" type="button" data-crop-reset="target">重置取景</button>
               </details>
             </section>
             <section class="control-section morph-options">
-              <div class="section-heading"><span class="step-index">03</span><h2>播放方向</h2></div>
+              <div class="section-heading"><span class="step-index">03</span><h2>迁移设置</h2></div>
+              <label class="morph-range">
+                <span class="field-line"><span class="field-label">细度</span><output id="morph-resolution-value" for="morph-resolution">128 × 128</output></span>
+                <input id="morph-resolution" type="range" min="64" max="128" step="16" value="128" aria-label="动图细度">
+                <span class="range-labels preference-labels"><span>更快</span><span>更细</span></span>
+              </label>
+              <label class="morph-range">
+                <span class="field-line"><span class="field-label">邻近权重</span><output id="morph-proximity-value" for="morph-proximity">13</output></span>
+                <input id="morph-proximity" type="range" min="0" max="26" step="1" value="13" aria-label="像素邻近权重">
+                <span class="range-labels preference-labels"><span>更大范围迁移</span><span>更靠近原位</span></span>
+              </label>
+            </section>
+            <section class="control-section morph-options">
+              <div class="section-heading"><span class="step-index">04</span><h2>播放方向</h2></div>
               <select class="text-input" id="morph-direction">
                 <option value="forward">原图 → 参考图</option>
                 <option value="reverse">逆动画：参考图 → 原图</option>

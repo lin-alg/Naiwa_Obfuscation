@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { concatBytes, gifFrameBlock, gifHeader } from './gif-codec.mjs';
+import { createId } from './id.mjs';
 import { zipFiles } from './zip-store.mjs';
 
 const $ = selector => document.querySelector(selector);
 const FRAMES = 100;
 const FRAME_DELAY = 8;
 const GRID_SIZE = 128;
-const PROXIMITY_IMPORTANCE = 13;
+const DEFAULT_PROXIMITY_IMPORTANCE = 13;
 const OUTPUT_SIZE = 400;
-const RASTER_SIZE = OUTPUT_SIZE;
 const PERSONAL_SPACE = 0.95;
 const ALIGNMENT_FACTOR = 0.8;
 const asText = bytes => new TextDecoder('ascii').decode(bytes);
@@ -47,16 +47,59 @@ export async function assertStaticImage(file) {
   if (isAnimatedRaster(header)) throw new Error(`「${file.name}」是动图；原图和参考图都只能使用静态图片。`);
 }
 
-export function squarePixels(source, side, crop = {}) {
-  const width = source.width ?? source.naturalWidth;
-  const height = source.height ?? source.naturalHeight;
-  if (!width || !height) throw new Error('无法读取图像尺寸。');
+function frameRect(side, aspect) {
+  const value = Number(aspect);
+  const safeAspect = Number.isFinite(value) && value > 0 ? value : 1;
+  if (safeAspect >= 1) {
+    const height = side / safeAspect;
+    return { x: 0, y: (side - height) / 2, width: side, height };
+  }
+  const width = side * safeAspect;
+  return { x: (side - width) / 2, y: 0, width, height: side };
+}
+
+function drawContained(source, context, rect, crop = {}, extendEdges = false) {
+  const width = source.naturalWidth || source.width;
+  const height = source.naturalHeight || source.height;
   const zoom = Math.max(1, Number(crop.zoom) || 1);
-  const cropSide = Math.max(1, Math.floor(Math.min(width, height) / zoom));
   const horizontal = Math.max(-1, Math.min(1, Number(crop.x) || 0));
   const vertical = Math.max(-1, Math.min(1, Number(crop.y) || 0));
-  const sourceX = Math.floor((horizontal + 1) * 0.5 * (width - cropSide));
-  const sourceY = Math.floor((vertical + 1) * 0.5 * (height - cropSide));
+  const scale = Math.min(rect.width / width, rect.height / height) * zoom;
+  const drawWidth = width * scale;
+  const drawHeight = height * scale;
+  const x = rect.x + (rect.width - drawWidth) * (1 + horizontal) / 2;
+  const y = rect.y + (rect.height - drawHeight) * (1 + vertical) / 2;
+  context.save();
+  context.beginPath();
+  context.rect(rect.x, rect.y, rect.width, rect.height);
+  context.clip();
+  context.drawImage(source, x, y, drawWidth, drawHeight);
+  if (extendEdges) {
+    const leftGap = Math.max(0, x - rect.x);
+    const rightGap = Math.max(0, rect.x + rect.width - x - drawWidth);
+    const topGap = Math.max(0, y - rect.y);
+    const bottomGap = Math.max(0, rect.y + rect.height - y - drawHeight);
+    if (leftGap) context.drawImage(source, 0, 0, 1, height, rect.x, y, leftGap, drawHeight);
+    if (rightGap) context.drawImage(source, width - 1, 0, 1, height, x + drawWidth, y, rightGap, drawHeight);
+    if (topGap) context.drawImage(source, 0, 0, width, 1, x, rect.y, drawWidth, topGap);
+    if (bottomGap) context.drawImage(source, 0, height - 1, width, 1, x, y + drawHeight, drawWidth, bottomGap);
+  }
+  context.restore();
+}
+
+export function outputDimensions(width, height, maxSide = OUTPUT_SIZE) {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1 || !Number.isFinite(maxSide) || maxSide < 1) {
+    throw new RangeError('图像尺寸无效。');
+  }
+  const scale = maxSide / Math.max(width, height);
+  return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) };
+}
+
+export function squarePixels(source, side, crop = {}, aspect = undefined, extendEdges = false) {
+  const width = source.naturalWidth || source.width;
+  const height = source.naturalHeight || source.height;
+  if (!width || !height) throw new Error('无法读取图像尺寸。');
+  const ratio = aspect ?? width / height;
   let drawable = source;
   let input;
   if (source.data) {
@@ -73,18 +116,19 @@ export function squarePixels(source, side, crop = {}) {
   context.fillRect(0, 0, side, side);
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = 'high';
-  context.drawImage(drawable, sourceX, sourceY, cropSide, cropSide, 0, 0, side, side);
+  drawContained(drawable, context, frameRect(side, ratio), crop, extendEdges);
   const pixels = context.getImageData(0, 0, side, side);
   if (input) input.width = input.height = 0;
   output.width = output.height = 0;
   return pixels;
 }
 
-export async function assignTargetPixels(source, target, side = GRID_SIZE, { weights, onProgress } = {}) {
+export async function assignTargetPixels(source, target, side = GRID_SIZE, { weights, proximityImportance = DEFAULT_PROXIMITY_IMPORTANCE, onProgress } = {}) {
   const count = side * side;
   if (!Number.isInteger(side) || side < 1 || source?.data?.length !== count * 4 || target?.data?.length !== count * 4 || (weights && weights.length !== count)) {
     throw new TypeError('像素匹配需要尺寸相同的正方形 RGBA 图像。');
   }
+  if (!Number.isFinite(proximityImportance) || proximityImportance < 0) throw new RangeError('邻近权重必须是非负有限数值。');
   const targetSources = Uint32Array.from({ length: count }, (_, index) => index);
   const mapping = new Uint32Array(count);
   let seed = 0;
@@ -101,7 +145,7 @@ export async function assignTargetPixels(source, target, side = GRID_SIZE, { wei
     const colorCost = (red * red + green * green + blue * blue) * colorWeight;
     const dx = sourceIndex % side - targetIndex % side;
     const dy = Math.floor(sourceIndex / side) - Math.floor(targetIndex / side);
-    const spatialCost = ((dx * dx + dy * dy) * PROXIMITY_IMPORTANCE) ** 2;
+    const spatialCost = ((dx * dx + dy * dy) * proximityImportance) ** 2;
     return colorCost + spatialCost;
   };
   const trySwap = (targetA, targetB) => {
@@ -368,15 +412,16 @@ export function updateMorphSimulation(positions, velocities, destinations, ages,
   }
 }
 
-function createMorphFrameRenderer(colors, side, rasterSide = side * 2, outputSide = side * 4) {
-  if (!Number.isInteger(rasterSide) || !Number.isInteger(outputSide) || rasterSide < side || outputSide < rasterSide) {
+function createMorphFrameRenderer(colors, side, rasterSide = side * 2, outputWidth = side * 4, outputHeight = outputWidth, aspect = 1) {
+  if (!Number.isInteger(rasterSide) || !Number.isInteger(outputWidth) || !Number.isInteger(outputHeight) || rasterSide < side || outputWidth < 1 || outputHeight < 1) {
     throw new RangeError('Voronoi 栅格与输出尺寸无效。');
   }
   const pixelCount = rasterSide * rasterSide;
   const owners = [new Int32Array(pixelCount), new Int32Array(pixelCount)];
-  const output = new Uint8Array(outputSide * outputSide);
+  const output = new Uint8Array(outputWidth * outputHeight);
   const samplePosition = Float32Array.from({ length: rasterSide }, (_, index) => (index + 0.5) * side / rasterSide);
   const initialStep = Math.max(1, 2 ** Math.floor(Math.log2(rasterSide - 1)));
+  const visibleFrame = frameRect(side, aspect);
 
   return positions => {
     let current = owners[0];
@@ -418,26 +463,28 @@ function createMorphFrameRenderer(colors, side, rasterSide = side * 2, outputSid
       [current, next] = [next, current];
     }
 
-    const rasterRatio = rasterSide / outputSide;
-    for (let y = 0; y < outputSide; y += 1) {
-      const rasterY = Math.min(rasterSide - 1, Math.floor((y + 0.5) * rasterRatio));
-      for (let x = 0; x < outputSide; x += 1) {
-        const rasterX = Math.min(rasterSide - 1, Math.floor((x + 0.5) * rasterRatio));
+    for (let y = 0; y < outputHeight; y += 1) {
+      const rasterY = Math.min(rasterSide - 1, Math.floor((visibleFrame.y + (y + 0.5) * visibleFrame.height / outputHeight) * rasterSide / side));
+      for (let x = 0; x < outputWidth; x += 1) {
+        const rasterX = Math.min(rasterSide - 1, Math.floor((visibleFrame.x + (x + 0.5) * visibleFrame.width / outputWidth) * rasterSide / side));
         const owner = current[rasterY * rasterSide + rasterX];
-        output[y * outputSide + x] = owner < 0 ? colors[0] : colors[owner];
+        output[y * outputWidth + x] = owner < 0 ? colors[0] : colors[owner];
       }
     }
     return output;
   };
 }
 
-export function renderMorphFrame(positions, colors, side, rasterSide = side * 2, outputSide = side * 4) {
-  return createMorphFrameRenderer(colors, side, rasterSide, outputSide)(positions);
+export function renderMorphFrame(positions, colors, side, rasterSide = side * 2, outputWidth = side * 4, outputHeight = outputWidth, aspect = 1) {
+  return createMorphFrameRenderer(colors, side, rasterSide, outputWidth, outputHeight, aspect)(positions);
 }
 
-async function createMorphGif(source, target, side, onProgress) {
-  const mapping = await assignTargetPixels(source, target, side, { onProgress: progress => onProgress?.(progress * 0.05) });
-  const size = OUTPUT_SIZE;
+async function createMorphGif(source, target, side, aspect, width, height, settings, onProgress) {
+  const mapping = await assignTargetPixels(source, target, side, {
+    proximityImportance: settings.proximityImportance * (GRID_SIZE / side) ** 2,
+    onProgress: progress => onProgress?.(progress * 0.05),
+  });
+  const rasterSide = Math.max(side, Math.round(OUTPUT_SIZE * side / GRID_SIZE));
   const { palette, indices: colors } = buildSourcePalette(source);
   const positions = new Float32Array(mapping.length * 2);
   const velocities = new Float32Array(mapping.length * 2);
@@ -445,20 +492,20 @@ async function createMorphGif(source, target, side, onProgress) {
   const ages = new Uint16Array(mapping.length);
   const bins = Array.from({ length: mapping.length }, () => []);
   const acceleration = new Float32Array(mapping.length * 2);
-  const renderFrame = createMorphFrameRenderer(colors, side, RASTER_SIZE, size);
+  const renderFrame = createMorphFrameRenderer(colors, side, rasterSide, width, height, aspect);
   for (let sourceIndex = 0; sourceIndex < mapping.length; sourceIndex += 1) {
     positions[sourceIndex * 2] = sourceIndex % side + 0.5;
     positions[sourceIndex * 2 + 1] = Math.floor(sourceIndex / side) + 0.5;
     destinations[sourceIndex * 2] = mapping[sourceIndex] % side + 0.5;
     destinations[sourceIndex * 2 + 1] = Math.floor(mapping[sourceIndex] / side) + 0.5;
   }
-  const blocks = [gifHeader(size, size, palette, 0)];
+  const blocks = [gifHeader(width, height, palette, 0)];
 
   for (let step = 0; step < 20; step += 1) updateMorphSimulation(positions, velocities, destinations, ages, side, bins, acceleration);
   for (let frame = 0; frame < FRAMES; frame += 1) {
     if (frame > 0) for (let step = 0; step < 14; step += 1) updateMorphSimulation(positions, velocities, destinations, ages, side, bins, acceleration);
     blocks.push(gifFrameBlock(renderFrame(positions), {
-      width: size, height: size, delay: FRAME_DELAY, minimum: 8, disposal: 2,
+      width, height, delay: FRAME_DELAY, minimum: 8, disposal: 2,
     }));
     onProgress?.(0.05 + 0.95 * (frame + 1) / FRAMES);
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -484,6 +531,8 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     sourceFile: $('#morph-source-file'), sourcePicker: $('#morph-source-picker'), sourceName: $('#morph-source-name'),
     list: $('#morph-source-list'), summary: $('#morph-batch-summary'), presets: $('#morph-presets'), presetName: $('#morph-preset-name'),
     presetFile: $('#morph-preset-file'), presetPicker: $('#morph-preset-picker'), direction: $('#morph-direction'),
+    resolution: $('#morph-resolution'), resolutionValue: $('#morph-resolution-value'),
+    proximity: $('#morph-proximity'), proximityValue: $('#morph-proximity-value'),
     generate: $('#morph-generate'), download: $('#morph-download'), downloadAll: $('#morph-download-all'), status: $('#morph-status'),
     sourcePreview: $('#morph-source-preview'), sourceEmpty: $('#morph-source-empty'), sourceMeta: $('#morph-source-meta'),
     sourceCrop: document.querySelector('[data-morph-crop="source"]'), sourceCropPreview: $('#morph-source-crop-preview'),
@@ -554,7 +603,10 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     const context = canvas.getContext('2d', { willReadFrequently: true });
     context.clearRect(0, 0, canvas.width, canvas.height);
     if (!source || (key === 'source' && (!source.complete || !source.naturalWidth))) return;
-    context.putImageData(squarePixels(source, canvas.width, cropValues(key)), 0, 0);
+    const entry = activeEntry();
+    const aspect = key === 'target' && entry ? entry.width / entry.height
+      : source.naturalWidth && source.naturalHeight ? source.naturalWidth / source.naturalHeight : 1;
+    context.putImageData(squarePixels(source, canvas.width, cropValues(key), aspect, key === 'target'), 0, 0);
   }
 
   function updateCropPreviewValues(key) {
@@ -588,7 +640,10 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     view.y = 0;
     view.image.addEventListener('load', () => {
       updatePreview(view);
-      if (view.key === 'source') updateCropPreview('source');
+      if (view.key === 'source') {
+        updateCropPreview('source');
+        updateCropPreview('target');
+      }
     });
     view.controls.addEventListener('click', event => {
       const button = event.target.closest('button');
@@ -669,9 +724,9 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
       elements.sourceMeta.textContent = '等待上传';
     }
     if (entry?.resultUrl) {
-      elements.outputMeta.textContent = `${entry.resultFrames} 帧 · ${formatBytes(entry.result.size)}`;
+      elements.outputMeta.textContent = `${entry.resultWidth} × ${entry.resultHeight} · ${entry.resultFrames} 帧 · ${formatBytes(entry.result.size)}`;
       elements.resultFooter.classList.add('is-ready');
-      elements.resultMessage.textContent = `${entry.file.name} · ${entry.direction === 'reverse' ? '逆动画' : '原图 → 参考图'} · ${entry.resultSize} × ${entry.resultSize} GIF`;
+      elements.resultMessage.textContent = `${entry.file.name} · ${entry.direction === 'reverse' ? '逆动画' : '原图 → 参考图'} · ${entry.resultWidth} × ${entry.resultHeight} GIF`;
     } else {
       elements.outputMeta.textContent = entry?.label ?? '等待生成';
       elements.resultFooter.classList.remove('is-ready');
@@ -696,6 +751,8 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     elements.summary.textContent = entries.length ? `${readyCount}/${entries.length} 已完成${state.busy ? ' · 正在处理' : ''}${entries.some(entry => entry.status === 'error') ? ' · 失败项可重试' : ''}` : '';
     elements.presetPicker.disabled = state.busy;
     elements.direction.disabled = state.busy;
+    elements.resolution.disabled = state.busy;
+    elements.proximity.disabled = state.busy;
     for (const key of ['source', 'target']) {
       elements[`${key}Crop`].querySelectorAll('input, button').forEach(control => { control.disabled = state.busy; });
     }
@@ -719,6 +776,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     state.activeId = entry?.id ?? null;
     syncActions();
     updateCropPreview('source');
+    updateCropPreview('target');
   }
 
   function removeEntry(entry) {
@@ -793,7 +851,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
         await assertStaticImage(file);
         const bitmap = await createImageBitmap(file);
         const entry = {
-          id: crypto.randomUUID(), file, width: bitmap.width, height: bitmap.height,
+          id: createId(), file, width: bitmap.width, height: bitmap.height,
           thumbUrl: '', sourceUrl: URL.createObjectURL(file), status: 'idle', label: '已载入，等待处理', progress: 0,
         };
         const thumb = squarePixels(bitmap, 88);
@@ -911,17 +969,21 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     let sourceBitmap;
     try {
       sourceBitmap = await createImageBitmap(entry.file);
-      const side = GRID_SIZE;
-      let source = squarePixels(sourceBitmap, side, sourceCrop);
+      const side = Number(elements.resolution.value);
+      const aspect = entry.width / entry.height;
+      const { width, height } = outputDimensions(entry.width, entry.height);
+      let source = squarePixels(sourceBitmap, side, sourceCrop, aspect);
       sourceBitmap.close();
       sourceBitmap = null;
-      let target = squarePixels(preset.image, side, targetCrop);
+      let target = squarePixels(preset.image, side, targetCrop, aspect, true);
       const direction = elements.direction.value;
       if (direction === 'reverse') [source, target] = [target, source];
       entry.label = '正在计算网格迁移…';
       syncActions();
       await new Promise(resolve => requestAnimationFrame(resolve));
-      const result = await createMorphGif(source, target, side, fraction => {
+      const result = await createMorphGif(source, target, side, aspect, width, height, {
+        proximityImportance: Number(elements.proximity.value),
+      }, fraction => {
         entry.progress = fraction;
         entry.label = `正在生成 GIF · ${Math.round(fraction * 100)}%`;
         setStatus(entry.label);
@@ -933,7 +995,8 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
       entry.result = result;
       entry.resultUrl = URL.createObjectURL(result);
       entry.resultFrames = FRAMES;
-      entry.resultSize = OUTPUT_SIZE;
+      entry.resultWidth = width;
+      entry.resultHeight = height;
       entry.direction = direction;
       entry.status = 'done';
       entry.progress = 1;
@@ -1050,7 +1113,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     const panel = elements[`${key}Crop`];
     panel.querySelectorAll('[data-crop-axis]').forEach(input => input.addEventListener('input', () => {
       updateCropPreviewValues(key);
-      if (state.entries.some(ready)) invalidateResults('裁切已更新，请重新生成。');
+      if (state.entries.some(ready)) invalidateResults('取景已更新，请重新生成。');
     }));
     panel.querySelector('[data-crop-reset]').addEventListener('click', () => {
       if (state.busy) return;
@@ -1058,9 +1121,17 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
       panel.querySelector('[data-crop-axis="y"]').value = '0';
       panel.querySelector('[data-crop-axis="zoom"]').value = '1';
       updateCropPreviewValues(key);
-      if (state.entries.some(ready)) invalidateResults('裁切已更新，请重新生成。');
+      if (state.entries.some(ready)) invalidateResults('取景已更新，请重新生成。');
     });
   }
+  elements.resolution.addEventListener('input', () => {
+    elements.resolutionValue.textContent = `${elements.resolution.value} × ${elements.resolution.value}`;
+    if (state.entries.some(ready)) invalidateResults('细度已更新，请重新生成。');
+  });
+  elements.proximity.addEventListener('input', () => {
+    elements.proximityValue.textContent = elements.proximity.value;
+    if (state.entries.some(ready)) invalidateResults('邻近权重已更新，请重新生成。');
+  });
   elements.presets.addEventListener('keydown', event => {
     if (!event.target.classList.contains('morph-preset')) return;
     const choices = [...elements.presets.querySelectorAll('.morph-preset')];

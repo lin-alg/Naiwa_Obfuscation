@@ -151,7 +151,7 @@ applicationChecks: try {
     await waitFor(`document.querySelectorAll('#morph-presets .morph-preset').length===4`);
     const presetState = await evaluate(`(()=>({count:document.querySelectorAll('#morph-presets .morph-preset').length,animated:[...document.querySelectorAll('#morph-presets img')].some(image=>image.src.endsWith('.gif')),selected:document.querySelector('#morph-presets .morph-preset[aria-checked="true"] span')?.textContent,highlighted:document.querySelectorAll('#morph-presets .morph-preset.is-active').length}))()`);
     if (presetState.count !== 4 || presetState.animated || presetState.selected !== '奶蛙' || presetState.highlighted !== 1) throw new Error(`Morph references must begin with static presets and one visible selection: ${JSON.stringify(presetState)}`);
-    if (!await evaluate(`!document.querySelector('#morph-resolution')&&!document.querySelector('#morph-proximity')&&document.querySelectorAll('.morph-crop [data-crop-axis]').length===6`)) throw new Error('Morph grid and proximity must use fixed settings, with independent source and reference crops');
+    if (!await evaluate(`document.querySelector('#morph-resolution').value==='128'&&document.querySelector('#morph-proximity').value==='13'&&document.querySelectorAll('.morph-crop [data-crop-axis]').length===6`)) throw new Error('Morph detail and proximity sliders must have stable defaults alongside independent framing controls');
 
     const dragFixture = fileURLToPath(new URL('./fixtures/static/4.jpg', import.meta.url));
     const dragBytes = (await readFile(dragFixture)).toString('base64');
@@ -159,7 +159,7 @@ applicationChecks: try {
     await waitFor(`document.querySelectorAll('#morph-source-list .batch-item').length===1`);
     await waitFor(`document.querySelector('#morph-source-preview').complete&&document.querySelector('#morph-source-preview').naturalWidth>0`);
     if (!await evaluate(`!document.querySelector('#morph-source-picker').closest('.control-section').classList.contains('is-drop-active')`)) throw new Error('The source drop target did not clear its drag state');
-    const cropPreview = await evaluate(`(()=>{const panel=document.querySelector('[data-morph-crop="source"]'),canvas=document.querySelector('#morph-source-crop-preview'),context=canvas.getContext('2d');panel.open=true;const before=context.getImageData(0,0,88,88).data.slice();const input=panel.querySelector('[data-crop-axis="x"]');input.value='0.5';input.dispatchEvent(new Event('input',{bubbles:true}));const after=context.getImageData(0,0,88,88).data;let changed=0;for(let i=0;i<before.length;i++)if(before[i]!==after[i])changed++;const zoom=panel.querySelector('[data-crop-axis="zoom"]');zoom.value='1.5';zoom.dispatchEvent(new Event('input',{bubbles:true}));return {changed,position:panel.querySelector('[data-crop-value="x"]').textContent,zoom:panel.querySelector('[data-crop-value="zoom"]').textContent}})()`);
+    const cropPreview = await evaluate(`(()=>{const panel=document.querySelector('[data-morph-crop="source"]'),canvas=document.querySelector('#morph-source-crop-preview'),context=canvas.getContext('2d');panel.open=true;const zoom=panel.querySelector('[data-crop-axis="zoom"]');zoom.value='1.5';zoom.dispatchEvent(new Event('input',{bubbles:true}));const before=context.getImageData(0,0,88,88).data.slice();const input=panel.querySelector('[data-crop-axis="x"]');input.value='0.5';input.dispatchEvent(new Event('input',{bubbles:true}));const after=context.getImageData(0,0,88,88).data;let changed=0;for(let i=0;i<before.length;i++)if(before[i]!==after[i])changed++;return {changed,position:panel.querySelector('[data-crop-value="x"]').textContent,zoom:panel.querySelector('[data-crop-value="zoom"]').textContent}})()`);
     if (cropPreview.changed < 100 || cropPreview.position !== '0.5' || cropPreview.zoom !== '150%') throw new Error(`Source crop controls must update their preview and values: ${JSON.stringify(cropPreview)}`);
     const targetCropChanged = await evaluate(`(()=>{const panel=document.querySelector('[data-morph-crop="target"]'),canvas=document.querySelector('#morph-target-crop-preview'),context=canvas.getContext('2d');panel.open=true;const zoom=panel.querySelector('[data-crop-axis="zoom"]');zoom.value='1.5';zoom.dispatchEvent(new Event('input',{bubbles:true}));const before=context.getImageData(0,0,88,88).data.slice();const input=panel.querySelector('[data-crop-axis="y"]');input.value='-0.5';input.dispatchEvent(new Event('input',{bubbles:true}));const after=context.getImageData(0,0,88,88).data;let changed=0;for(let i=0;i<before.length;i++)if(before[i]!==after[i])changed++;return changed})()`);
     if (targetCropChanged < 100) throw new Error('Reference crop controls must update their preview');
@@ -194,6 +194,9 @@ applicationChecks: try {
     const sources = [fileURLToPath(new URL('./fixtures/static/1.jpg', import.meta.url)), fileURLToPath(new URL('./fixtures/static/2.jpg', import.meta.url))];
     await setInputFile('#morph-source-file', sources);
     await waitFor(`document.querySelectorAll('#morph-source-list .batch-item[data-status="idle"]').length===2`);
+    const targetFit = await evaluate(`(()=>{const data=document.querySelector('#morph-target-crop-preview').getContext('2d').getImageData(0,0,88,88).data,point=(x,y)=>[...data.slice((y*88+x)*4,(y*88+x)*4+3)];return {outer:point(2,44),nearEdge:point(20,44),inner:point(44,44)}})()`);
+    if (targetFit.outer.some((channel,index)=>Math.abs(channel-targetFit.nearEdge[index])>8) || targetFit.inner.every(channel => channel > 245)) throw new Error(`The reference edge color must extend seamlessly into the image frame: ${JSON.stringify(targetFit)}`);
+    await evaluate(`(()=>{const input=document.querySelector('#morph-resolution');input.value='64';input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
     await setInputFile('#morph-preset-file', fileURLToPath(new URL('./fixtures/static/3.jpg', import.meta.url)));
     await waitFor(`document.querySelectorAll('#morph-presets .morph-preset').length===5&&document.querySelector('#morph-preset-name').textContent.includes('3')&&document.querySelectorAll('#morph-presets .morph-preset.is-active[aria-checked="true"]').length===1`);
     await evaluate(`document.querySelector('#morph-presets .preset-remove').click()`);
@@ -201,8 +204,8 @@ applicationChecks: try {
     await evaluate(`document.querySelector('#morph-generate').click()`);
     await waitFor(`document.querySelectorAll('#morph-source-list .batch-item[data-status="done"]').length===2`);
     if (!await evaluate(`!document.querySelector('#morph-generate').disabled&&document.querySelector('#morph-generate').textContent.includes('重新生成全部')`)) throw new Error('Completed morph batches must remain regeneratable');
-    const generated = await evaluate(`(async()=>{const image=document.querySelector('#morph-output-preview'),blob=await fetch(image.src).then(response=>response.blob()),bytes=new Uint8Array(await blob.arrayBuffer()),{parseGif,gifFrames,decodeIndices}=await import('./src/gif-codec.mjs'),gif=parseGif(bytes),first=gif.frames[0],firstIndices=decodeIndices(first),transparentPixels=first.transparent<0?0:firstIndices.filter(index=>index===first.transparent).length;let initial=null,last=null,frameIndex=0;for(const frame of gifFrames(gif)){if(frameIndex===0)initial=frame.data.slice();if(frameIndex===gif.frames.length-1)last=frame.data.slice();frameIndex++}const endpointChanges=initial.reduce((sum,value,index)=>sum+(value!==last[index]?1:0),0);return {mime:blob.type,signature:String.fromCharCode(...bytes.subarray(0,6)),frames:gif.frames.length,loop:gif.loop,delays:[...new Set(gif.frames.map(frame=>frame.delay))],duration:gif.duration,width:gif.width,height:gif.height,transparent:first.transparent,transparentPixels,endpointChanges,paletteColors:gif.palette.length/3,meta:document.querySelector('#morph-output-meta').textContent}})()`);
-    if (generated.mime !== 'image/gif' || generated.signature !== 'GIF89a' || generated.frames !== 100 || generated.loop !== 0 || JSON.stringify(generated.delays) !== JSON.stringify([8]) || generated.duration !== 800 || generated.width !== 400 || generated.height !== 400 || generated.transparent !== -1 || generated.transparentPixels !== 0 || generated.paletteColors !== 256 || !generated.meta.includes('100 帧') || generated.endpointChanges < 1) throw new Error(`Morph GIF must match Obamify resolution and timing, use an opaque NeuQuant palette, and animate: ${JSON.stringify(generated)}`);
+    const generated = await evaluate(`(async()=>{const image=document.querySelector('#morph-output-preview'),source=document.querySelector('#morph-source-preview'),blob=await fetch(image.src).then(response=>response.blob()),bytes=new Uint8Array(await blob.arrayBuffer()),{parseGif,gifFrames,decodeIndices}=await import('./src/gif-codec.mjs'),gif=parseGif(bytes),first=gif.frames[0],firstIndices=decodeIndices(first),transparentPixels=first.transparent<0?0:firstIndices.filter(index=>index===first.transparent).length;let initial=null,last=null,frameIndex=0;for(const frame of gifFrames(gif)){if(frameIndex===0)initial=frame.data.slice();if(frameIndex===gif.frames.length-1)last=frame.data.slice();frameIndex++}const endpointChanges=initial.reduce((sum,value,index)=>sum+(value!==last[index]?1:0),0);return {mime:blob.type,signature:String.fromCharCode(...bytes.subarray(0,6)),frames:gif.frames.length,loop:gif.loop,delays:[...new Set(gif.frames.map(frame=>frame.delay))],duration:gif.duration,width:gif.width,height:gif.height,sourceWidth:source.naturalWidth,sourceHeight:source.naturalHeight,transparent:first.transparent,transparentPixels,endpointChanges,paletteColors:gif.palette.length/3,meta:document.querySelector('#morph-output-meta').textContent}})()`);
+    if (generated.mime !== 'image/gif' || generated.signature !== 'GIF89a' || generated.frames !== 100 || generated.loop !== 0 || JSON.stringify(generated.delays) !== JSON.stringify([8]) || generated.duration !== 800 || Math.max(generated.width, generated.height) !== 400 || Math.abs(generated.width / generated.height - generated.sourceWidth / generated.sourceHeight) > 1 / Math.min(generated.width, generated.height) || generated.transparent !== -1 || generated.transparentPixels !== 0 || generated.paletteColors !== 256 || !generated.meta.includes('100 帧') || generated.endpointChanges < 1) throw new Error(`Morph GIF must preserve the source aspect ratio, timing, opaque palette and animation: ${JSON.stringify(generated)}`);
     const zipStart = finishedDownloads.length;
     await evaluate(`document.querySelector('#morph-download-all').click()`);
     const zipDeadline = Date.now() + 20000;
@@ -213,7 +216,10 @@ applicationChecks: try {
 
     await evaluate(`(()=>{const input=document.querySelector('[data-morph-crop="target"] [data-crop-axis="x"]');input.value='0.25';input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
     await waitFor(`document.querySelectorAll('#morph-source-list .batch-item[data-status="idle"]').length===2`);
-    if (!await evaluate(`[...document.querySelectorAll('#morph-source-list .batch-item')].every(row=>row.querySelector('.batch-copy small').textContent.includes('裁切已更新'))`)) throw new Error('Changing crop settings must invalidate generated GIFs');
+    if (!await evaluate(`[...document.querySelectorAll('#morph-source-list .batch-item')].every(row=>row.querySelector('.batch-copy small').textContent.includes('取景已更新'))`)) throw new Error('Changing framing settings must invalidate generated GIFs');
+    await evaluate(`(()=>{const resolution=document.querySelector('#morph-resolution');resolution.value='80';resolution.dispatchEvent(new Event('input',{bubbles:true}));const proximity=document.querySelector('#morph-proximity');proximity.value='14';proximity.dispatchEvent(new Event('input',{bubbles:true}));return true})()`);
+    if (!await evaluate(`document.querySelector('#morph-resolution-value').textContent==='80 × 80'&&document.querySelector('#morph-proximity-value').textContent==='14'`)) throw new Error('Morph sliders must reflect their selected values');
+    await evaluate(`(()=>{const resolution=document.querySelector('#morph-resolution');resolution.value='64';resolution.dispatchEvent(new Event('input',{bubbles:true}));const proximity=document.querySelector('#morph-proximity');proximity.value='13';proximity.dispatchEvent(new Event('input',{bubbles:true}))})()`);
     await evaluate(`document.querySelector('#morph-direction').value='reverse';document.querySelector('#morph-direction').dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('#morph-source-list .progress-ring').click()`);
     await waitFor(`document.querySelector('#morph-source-list .batch-item').dataset.status==='done'&&document.querySelector('#morph-result-message').textContent.includes('逆动画')`);
     if (pageErrors.length) throw new Error(`Morph runtime errors: ${pageErrors.join(' | ')}`);
@@ -231,9 +237,18 @@ applicationChecks: try {
     const obamaFixture = fileURLToPath(new URL('./fixtures/static/obama.png', import.meta.url));
     await setInputFile('#morph-source-file', obamaFixture);
     await waitFor(`document.querySelector('#morph-source-list .batch-item')?.dataset.status==='idle'`);
-    const obamaDownloadStart = finishedDownloads.length;
+    await evaluate(`(()=>{const resolution=document.querySelector('#morph-resolution');resolution.value='64';resolution.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    const fastGenerationStarted = Date.now();
     await evaluate(`document.querySelector('#morph-generate').click()`);
     await waitFor(`document.querySelector('#morph-source-list .batch-item')?.dataset.status==='done'`);
+    const fastGenerationMilliseconds = Date.now() - fastGenerationStarted;
+    await evaluate(`(()=>{const resolution=document.querySelector('#morph-resolution');resolution.value='128';resolution.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    const obamaDownloadStart = finishedDownloads.length;
+    const obamaGenerationStarted = Date.now();
+    await evaluate(`document.querySelector('#morph-generate').click()`);
+    await waitFor(`document.querySelector('#morph-source-list .batch-item')?.dataset.status==='done'`);
+    const obamaGenerationMilliseconds = Date.now() - obamaGenerationStarted;
+    if (fastGenerationMilliseconds >= obamaGenerationMilliseconds) throw new Error(`Lower detail should generate faster on the same image: ${JSON.stringify({ fastGenerationMilliseconds, obamaGenerationMilliseconds })}`);
     await evaluate(`document.querySelector('#morph-download').click()`);
     const obamaDownloadDeadline = Date.now() + 20000;
     while (finishedDownloads.length === obamaDownloadStart && Date.now() < obamaDownloadDeadline) await new Promise(resolve => setTimeout(resolve, 100));
@@ -247,15 +262,16 @@ applicationChecks: try {
       const frames=[];
       for(const frame of gifFrames(gif))frames.push(frame.data.slice());
       const indices=[0,19,39,59,79,99],sheet=document.createElement('canvas');
-      sheet.width=1200;sheet.height=240;
+      const tileWidth=200,tileHeight=Math.round(tileWidth*gif.height/gif.width);
+      sheet.width=tileWidth*6;sheet.height=tileHeight+40;
       const context=sheet.getContext('2d');
       for(let column=0;column<indices.length;column++){
         const index=indices[column],tile=document.createElement('canvas');
         tile.width=gif.width;tile.height=gif.height;
         tile.getContext('2d').putImageData(new ImageData(frames[index],gif.width,gif.height),0,0);
-        context.drawImage(tile,column*200,0,200,200);
-        context.fillStyle='#fff';context.fillRect(column*200,200,200,40);
-        context.fillStyle='#111';context.font='18px sans-serif';context.fillText('Frame '+index,column*200+8,226);
+         context.drawImage(tile,column*tileWidth,0,tileWidth,tileHeight);
+         context.fillStyle='#fff';context.fillRect(column*tileWidth,tileHeight,tileWidth,40);
+         context.fillStyle='#111';context.font='18px sans-serif';context.fillText('Frame '+index,column*tileWidth+8,tileHeight+26);
       }
       const meanMotion=(first,last)=>{
         let sum=0,count=0;
@@ -271,15 +287,17 @@ applicationChecks: try {
         return Number((sum/count).toFixed(2));
       });
       let endpointChanges=0;for(let offset=0;offset<frames[0].length;offset+=16)if(frames[0][offset]!==final[offset]||frames[0][offset+1]!==final[offset+1]||frames[0][offset+2]!==final[offset+2])endpointChanges++;
-      return {sheet:sheet.toDataURL('image/png').split(',')[1],frames:gif.frames.length,width:gif.width,height:gif.height,meanRgbDifferenceFromLast:diffs,middleMotionDelta:meanMotion(40,60),lateMotionDelta:meanMotion(89,99),endpointChanges}
+      const source=document.querySelector('#morph-source-preview');
+      return {sheet:sheet.toDataURL('image/png').split(',')[1],frames:gif.frames.length,width:gif.width,height:gif.height,sourceWidth:source.naturalWidth,sourceHeight:source.naturalHeight,meanRgbDifferenceFromLast:diffs,middleMotionDelta:meanMotion(40,60),lateMotionDelta:meanMotion(89,99),endpointChanges}
     })()`);
     const obamaContactSheet = join(temporaryRoot, 'obama-current-frames.png');
     await writeFile(obamaContactSheet, Buffer.from(obamaFrames.sheet, 'base64'));
-    if (obamaFrames.width !== 400 || obamaFrames.height !== 400 || obamaFrames.frames !== 100 || obamaGifBytes.subarray(0, 6).toString('ascii') !== 'GIF89a') throw new Error(`Obama diagnostic output is invalid: ${JSON.stringify({ ...obamaFrames, bytes: obamaGifBytes.length })}`);
+    if (Math.max(obamaFrames.width, obamaFrames.height) !== 400 || Math.abs(obamaFrames.width / obamaFrames.height - obamaFrames.sourceWidth / obamaFrames.sourceHeight) > 1 / Math.min(obamaFrames.width, obamaFrames.height) || obamaFrames.frames !== 100 || obamaGifBytes.subarray(0, 6).toString('ascii') !== 'GIF89a') throw new Error(`Obama diagnostic output does not preserve the source frame: ${JSON.stringify({ ...obamaFrames, bytes: obamaGifBytes.length })}`);
     if (obamaFrames.lateMotionDelta >= 0.1 || obamaFrames.lateMotionDelta >= obamaFrames.middleMotionDelta) throw new Error(`Obama morph must settle near the final frames: ${JSON.stringify(obamaFrames)}`);
     if (obamaFrames.endpointChanges < 1000) throw new Error(`Obama morph must visibly transform from its first frame: ${JSON.stringify(obamaFrames)}`);
+
     if (pageErrors.length) throw new Error(`Morph runtime errors: ${pageErrors.join(' | ')}`);
-    console.log(`morph browser checks passed: ${JSON.stringify({ presets: presetState, generated, archive: archive.map(item => item.name), reverse: true, obama: { gifBytes: obamaGifBytes.length, contactSheet: obamaContactSheet, endpointChanges: obamaFrames.endpointChanges, meanRgbDifferenceFromLast: obamaFrames.meanRgbDifferenceFromLast, middleMotionDelta: obamaFrames.middleMotionDelta, lateMotionDelta: obamaFrames.lateMotionDelta } })}`);
+    console.log(`morph browser checks passed: ${JSON.stringify({ presets: presetState, generated, archive: archive.map(item => item.name), reverse: true, obama: { gifBytes: obamaGifBytes.length, contactSheet: obamaContactSheet, fastGenerationMilliseconds, obamaGenerationMilliseconds, endpointChanges: obamaFrames.endpointChanges, meanRgbDifferenceFromLast: obamaFrames.meanRgbDifferenceFromLast, middleMotionDelta: obamaFrames.middleMotionDelta, lateMotionDelta: obamaFrames.lateMotionDelta } })}`);
     break applicationChecks;
   }
   if (process.argv.includes('--phantom-only')) {

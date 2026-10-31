@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { createId } from './id.mjs';
+
 export class WorkerPool {
   constructor({ concurrency, memoryBudget } = {}) {
     const mobile = matchMedia('(pointer: coarse)').matches;
@@ -10,7 +12,7 @@ export class WorkerPool {
 
   run(payload, { signal, onProgress, memory = 64000000 } = {}) {
     return new Promise((resolve, reject) => {
-      const job = { id: crypto.randomUUID(), payload, signal, onProgress, memory, resolve, reject };
+      const job = { id: createId(), payload, signal, onProgress, memory, resolve, reject };
       job.abort = () => {
         const index = this.queue.indexOf(job);
         if (index >= 0) this.queue.splice(index, 1);

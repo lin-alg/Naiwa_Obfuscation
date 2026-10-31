@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from 'node:assert/strict';
-import { assignTargetPixels, buildSourcePalette, destinationForce, isAnimatedRaster, renderMorphFrame, updateMorphSimulation } from '../src/morph-animation.mjs';
+import { assignTargetPixels, buildSourcePalette, destinationForce, isAnimatedRaster, outputDimensions, renderMorphFrame, updateMorphSimulation } from '../src/morph-animation.mjs';
 
 const image = colors => ({
   width: 2,
@@ -17,6 +17,10 @@ await assert.rejects(assignTargetPixels(source, target, 3), /尺寸相同/);
 await assert.rejects(assignTargetPixels(source, target, 2, { weights: new Uint8Array(3) }), /尺寸相同/);
 const weightedMatch = await assignTargetPixels(source, target, 2, { weights: Uint8Array.of(0, 255, 255, 255) });
 assert.equal(weightedMatch.length, 4, 'pixel matching accepts a per-target color weight map');
+assert.equal((await assignTargetPixels(source, target, 2, { proximityImportance: 0 })).length, 4, 'pixel matching accepts a color-only proximity setting');
+await assert.rejects(assignTargetPixels(source, target, 2, { proximityImportance: -1 }), /邻近权重/);
+assert.deepEqual(outputDimensions(1600, 900), { width: 400, height: 225 }, 'landscape output preserves its source aspect ratio');
+assert.deepEqual(outputDimensions(900, 1600), { width: 225, height: 400 }, 'portrait output preserves its source aspect ratio');
 
 assert.equal(destinationForce(0), 0, 'destination pull begins at zero');
 assert.equal(destinationForce(120), destinationForce(60) * 8, 'destination pull follows Obamify’s cubic acceleration curve');
@@ -109,6 +113,10 @@ assert.equal(detailedFrame.length, detailedSide * 4 * detailedSide * 4, 'the det
 assert.ok(detailedFrame.every(index => index > 0), 'the detailed Voronoi frame has no uncovered pixels');
 const wideFrame = renderMorphFrame(Float32Array.of(0.16, 0.16, 32.16, 0.16), Uint8Array.of(1, 2), 128, 400, 400);
 assert.equal(wideFrame[399], 2, '400-pixel JFA starts at the upstream 256-pixel jump so distant seeds reach the canvas edges');
+const landscapeFrame = renderMorphFrame(Float32Array.of(0.5, 0.5, 1.5, 0.5, 0.5, 1.5, 1.5, 1.5), Uint8Array.of(1, 2, 3, 4), 2, 8, 8, 4, 2);
+assert.equal(landscapeFrame.length, 32, 'the renderer returns the source aspect ratio rather than a square frame');
+const portraitFrame = renderMorphFrame(Float32Array.of(0.5, 0.5, 1.5, 0.5, 0.5, 1.5, 1.5, 1.5), Uint8Array.of(1, 2, 3, 4), 2, 8, 4, 8, 0.5);
+assert.equal(portraitFrame.length, 32, 'portrait frames map the same square simulation into a tall output');
 
 const sourcePalette = buildSourcePalette(source, 3);
 assert.equal(sourcePalette.palette.length, 256 * 3, 'NeuQuant returns a GIF-sized RGB palette');

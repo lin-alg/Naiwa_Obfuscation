@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import { createId } from './id.mjs';
+
 const API_URL = 'https://bsz.iirose.cn/api';
 const PREFERENCE_KEY = 'naiwa-analytics-enabled';
 const LEGACY_CONSENT_KEY = 'naiwa-analytics-consent';
@@ -14,11 +16,6 @@ function readCookie() {
 function writeCookie(value, maxAge = 31536000) {
   const secure = location.protocol === 'https:' ? '; Secure' : '';
   document.cookie = `${COOKIE_NAME}=${encodeURIComponent(value)}; Max-Age=${maxAge}; Path=/; SameSite=Lax${secure}`;
-}
-
-function randomIdentity() {
-  if (crypto.randomUUID) return crypto.randomUUID();
-  return [...crypto.getRandomValues(new Uint8Array(16))].map(byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
 function getPreference() {
@@ -74,7 +71,7 @@ export function initializeAnalytics() {
     if (method === 'POST') {
       const serviceIdentity = response.headers.get('Set-Bsz-Identity');
       if (serviceIdentity) writeCookie(serviceIdentity);
-      else if (!identity) writeCookie(randomIdentity());
+      else if (!identity) writeCookie(createId());
     }
     return result.data;
   }
