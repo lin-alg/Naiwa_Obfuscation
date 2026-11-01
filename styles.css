@@ -334,11 +334,11 @@ input[type="range"] { width: 100%; height: 18px; margin: 4px 0 0; accent-color: 
 .morph-preset img { aspect-ratio: 1.25; }
 .morph-preset[aria-checked="true"] { color: var(--accent-ink); border-color: var(--accent-strong); background: #fffbe7; box-shadow: inset 0 0 0 1px var(--accent-strong), 0 2px 8px #493d0918; }
 .morph-preset[aria-checked="true"] span { color: var(--accent-ink); font-weight: 700; }
-.morph-character-field { margin-top: 12px; }
+.morph-character-field { margin-top: 16px; }
 .morph-character-field .field-label { margin-bottom: 5px; }
 .morph-character-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
-.morph-character-entry .text-input { min-width: 0; height: 34px; }
-.morph-character-entry .quiet-button { min-height: 34px; padding: 0 9px; white-space: nowrap; }
+.morph-character-entry .text-input { min-width: 0; height: 38px; }
+.morph-character-entry .quiet-button { min-height: 38px; padding: 5px 10px; line-height: 1.4; white-space: nowrap; }
 .morph-character-presets { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 6px; }
 .morph-character-choice { min-width: 34px; height: 34px; display: grid; place-items: center; padding: 3px; color: #59645b; background: white; border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
 .morph-character-choice img { width: 25px; height: 25px; display: block; object-fit: contain; }
