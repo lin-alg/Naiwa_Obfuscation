@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { gunzipSync, gzipSync } from 'node:zlib';
 import { alignedFrameDelays, decodeIndices, embeddedImagePayload, encodeIndices, gifFrameBlock, gifFrames, gifHeader, gifPayload, gifPayloadBlock, parseGif, concatBytes } from '../src/gif-codec.mjs';
+import { cropChangedFrame } from '../src/morph-animation.mjs';
 
 const asset = (name) => fileURLToPath(new URL(`../assets/images/animated/${name}`, import.meta.url));
 const fixture = (name) => fileURLToPath(new URL(`./fixtures/animated/${name}`, import.meta.url));
@@ -55,6 +56,33 @@ for (const [sourcePath, targetPath] of [
   assert.equal(delays.length, source.frames.length);
   assert.equal(delays.reduce((sum, delay) => sum + delay, 0), target.duration, `${sourcePath} follows preset duration`);
   assert.ok(delays.every(delay => Number.isInteger(delay) && delay >= 1));
+}
+
+const deltaPalette = new Uint8Array(256 * 3);
+deltaPalette.set(Uint8Array.of(255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255));
+const firstDeltaFrame = Uint8Array.of(0, 1, 2, 3, 1, 2, 3, 0, 2, 3, 0, 1);
+const secondDeltaFrame = firstDeltaFrame.slice();
+secondDeltaFrame[6] = 0;
+secondDeltaFrame[11] = 3;
+const deltaFrames = [firstDeltaFrame, secondDeltaFrame, secondDeltaFrame.slice()];
+let previousDeltaFrame = null;
+const deltaBlocks = deltaFrames.map((frame, frameIndex) => {
+  const transparent = frameIndex ? 255 : -1;
+  const crop = cropChangedFrame(frame, previousDeltaFrame, 4, 3, transparent);
+  previousDeltaFrame = frame.slice();
+  return gifFrameBlock(crop.indices, {
+    x: crop.x, y: crop.y, width: crop.width, height: crop.height,
+    delay: 8, minimum: 8, transparent, disposal: 1,
+  });
+});
+const deltaGif = parseGif(concatBytes([gifHeader(4, 3, deltaPalette), ...deltaBlocks, Uint8Array.of(0x3b)]));
+assert.equal(deltaGif.frames[1].transparent, 255, 'delta frames reserve one transparent palette entry');
+const decodedDeltaFrames = [];
+for (const frame of gifFrames(deltaGif)) decodedDeltaFrames.push(frame.data.slice());
+const expectedDeltaFrames = deltaFrames.map(indices => Uint8ClampedArray.from(Array.from(indices).flatMap(index => [...deltaPalette.subarray(index * 3, index * 3 + 3), 255])));
+assert.equal(decodedDeltaFrames.length, expectedDeltaFrames.length, 'delta encoding preserves repeated frame timing');
+for (let index = 0; index < expectedDeltaFrames.length; index += 1) {
+  assert.deepEqual(decodedDeltaFrames[index], expectedDeltaFrames[index], `delta frame ${index} composites pixel-for-pixel`);
 }
 
 console.log(`GIF codec passed: ${samples.length} files, ${frameTotal} frames, lossless index and payload round trips.`);

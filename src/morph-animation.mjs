@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { concatBytes, gifFrameBlock, gifHeader } from './gif-codec.mjs';
 import { createId } from './id.mjs';
+import { createAnimatedWebP } from './webp-animation.mjs';
 import { zipFiles } from './zip-store.mjs';
 
 const $ = selector => document.querySelector(selector);
@@ -13,9 +14,21 @@ const PERSONAL_SPACE = 0.95;
 const PERSONAL_SPACE_SQUARED = PERSONAL_SPACE * PERSONAL_SPACE;
 const ALIGNMENT_FACTOR = 0.8;
 const asText = bytes => new TextDecoder('ascii').decode(bytes);
-export const displayProgress = fraction => fraction < 0.6
-  ? 0.6 * Math.sqrt(fraction / 0.6)
-  : 0.6 + 0.4 * ((fraction - 0.6) / 0.4) ** 1.6;
+export const displayProgress = (fraction, elapsedMs = 0) => {
+  const actual = fraction < 0.6
+    ? 0.6 * Math.sqrt(fraction / 0.6)
+    : 0.6 + 0.4 * ((fraction - 0.6) / 0.4) ** 1.6;
+  const elapsed = Math.max(0, elapsedMs);
+  // Keep the estimate moving while the worker is busy. It reaches 60% at
+  // five seconds, then advances by at least one point per second, stopping at 99%.
+  const timed = elapsed < 5000
+    ? 0.6 * elapsed / 5000
+    : Math.min(0.99, 0.6 + Math.floor((elapsed - 5000) / 1000) / 100);
+  // Do not let a late worker message jump the visual ramp; it may lead the
+  // timed estimate by only one point and is then caught up smoothly.
+  const smoothedActual = elapsed > 0 ? Math.min(actual, timed + 0.01) : actual;
+  return Math.min(1, Math.max(smoothedActual, timed));
+};
 
 export function isAnimatedRaster(bytes) {
   if (bytes.length >= 6 && /^GIF8[79]a$/.test(asText(bytes.subarray(0, 6)))) return true;
@@ -127,11 +140,12 @@ export function squarePixels(source, side, crop = {}, aspect = undefined, extend
   return pixels;
 }
 
-export async function assignTargetPixels(source, target, side = GRID_SIZE, { weights, proximityImportance = DEFAULT_PROXIMITY_IMPORTANCE, onProgress, yieldControl = () => new Promise(resolve => setTimeout(resolve, 0)) } = {}) {
+export async function assignTargetPixels(source, target, side = GRID_SIZE, { weights, proximityImportance = DEFAULT_PROXIMITY_IMPORTANCE, attemptsPerPixel = 32, onProgress, yieldControl = () => new Promise(resolve => setTimeout(resolve, 0)) } = {}) {
   const count = side * side;
   if (!Number.isInteger(side) || side < 1 || source?.data?.length !== count * 4 || target?.data?.length !== count * 4 || (weights && weights.length !== count)) {
     throw new TypeError('像素匹配需要尺寸相同的正方形 RGBA 图像。');
   }
+  if (!Number.isInteger(attemptsPerPixel) || attemptsPerPixel < 1) throw new RangeError('匹配搜索次数必须是正整数。');
   if (!Number.isFinite(proximityImportance) || proximityImportance < 0) throw new RangeError('邻近权重必须是非负有限数值。');
   const targetSources = Uint32Array.from({ length: count }, (_, index) => index);
   const mapping = new Uint32Array(count);
@@ -207,7 +221,7 @@ export async function assignTargetPixels(source, target, side = GRID_SIZE, { wei
     randomState ^= randomState << 5;
     return randomState >>> 0;
   };
-  const attempts = count * 128;
+  const attempts = count * attemptsPerPixel;
   const radii = [];
   for (let radius = Math.max(2, Math.round(side / 4)); ; radius = Math.max(2, Math.floor(radius / 2))) {
     radii.push(radius);
@@ -219,8 +233,8 @@ export async function assignTargetPixels(source, target, side = GRID_SIZE, { wei
     const radius = radii[Math.floor(generation / generationsPerRadius)];
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       const targetA = random() % count;
-      const ax = targetA % side;
-      const ay = Math.floor(targetA / side);
+      const ax = columns[targetA];
+      const ay = rows[targetA];
       const bx = Math.max(0, Math.min(side - 1, ax + random() % (radius * 2 + 1) - radius));
       const by = Math.max(0, Math.min(side - 1, ay + random() % (radius * 2 + 1) - radius));
       trySwap(targetA, by * side + bx);
@@ -374,17 +388,23 @@ export function destinationForce(age, destinationForce = 0.13) {
   return Math.min(1000, (age / 60 * destinationForce) ** 3);
 }
 
+export function createSimulationBins(count) {
+  return { heads: new Int32Array(count), next: new Int32Array(count) };
+}
+
 export function updateMorphSimulation(positions, velocities, destinations, ages, side, bins, acceleration) {
   const count = ages.length;
   const pixelScale = OUTPUT_SIZE / side;
   acceleration.fill(0);
-  for (let index = 0; index < bins.length; index += 1) bins[index].length = 0;
+  bins.heads.fill(-1);
   for (let index = 0; index < count; index += 1) {
     const x = positions[index * 2];
     const y = positions[index * 2 + 1];
     const column = Math.min(side - 1, Math.max(0, Math.floor(x)));
     const row = Math.min(side - 1, Math.max(0, Math.floor(y)));
-    bins[row * side + column].push(index);
+    const cell = row * side + column;
+    bins.next[index] = bins.heads[cell];
+    bins.heads[cell] = index;
 
     const wallSpace = PERSONAL_SPACE * 0.5;
     if (x < wallSpace) acceleration[index * 2] += (wallSpace - x) / wallSpace / pixelScale;
@@ -410,9 +430,7 @@ export function updateMorphSimulation(positions, velocities, destinations, ages,
     let totalWeight = 0;
     for (let neighborY = Math.max(0, row - 1); neighborY <= Math.min(side - 1, row + 1); neighborY += 1) {
       for (let neighborX = Math.max(0, column - 1); neighborX <= Math.min(side - 1, column + 1); neighborX += 1) {
-        const neighborBin = bins[neighborY * side + neighborX];
-        for (let neighborIndex = 0; neighborIndex < neighborBin.length; neighborIndex += 1) {
-          const other = neighborBin[neighborIndex];
+        for (let other = bins.heads[neighborY * side + neighborX]; other !== -1; other = bins.next[other]) {
           if (other === index) continue;
           const dx = positions[other * 2] - x;
           const dy = positions[other * 2 + 1] - y;
@@ -467,7 +485,16 @@ function createMorphFrameRenderer(colors, side, rasterSide = side * 2, outputWid
   const seedSpacing = rasterSide / side;
   const maxJump = colors.length >= side * side ? Math.ceil(seedSpacing) : rasterSide - 1;
   const initialStep = Math.max(1, 2 ** Math.floor(Math.log2(maxJump)));
+  const steps = [];
+  for (let step = initialStep; step >= 1; step = Math.floor(step / 2)) steps.push(step);
+  const initialHalo = steps.slice(1).reduce((sum, step) => sum + step, 0);
   const visibleFrame = frameRect(side, aspect);
+  const outputRange = (start, extent, count) => [
+    Math.max(0, Math.floor((start + 0.5 * extent / count) * rasterSide / side)),
+    Math.min(rasterSide - 1, Math.floor((start + (count - 0.5) * extent / count) * rasterSide / side)),
+  ];
+  const [visibleLeft, visibleRight] = outputRange(visibleFrame.x, visibleFrame.width, outputWidth);
+  const [visibleTop, visibleBottom] = outputRange(visibleFrame.y, visibleFrame.height, outputHeight);
 
   return positions => {
     let current = owners[0];
@@ -480,10 +507,16 @@ function createMorphFrameRenderer(colors, side, rasterSide = side * 2, outputWid
       current[y * rasterSide + x] = index;
     }
 
-    for (let step = initialStep; step >= 1; step = Math.floor(step / 2)) {
-      for (let y = 0; y < rasterSide; y += 1) {
+    let remainingHalo = initialHalo;
+    for (let stepIndex = 0; stepIndex < steps.length; stepIndex += 1) {
+      const step = steps[stepIndex];
+      const left = Math.max(0, visibleLeft - remainingHalo);
+      const right = Math.min(rasterSide - 1, visibleRight + remainingHalo);
+      const top = Math.max(0, visibleTop - remainingHalo);
+      const bottom = Math.min(rasterSide - 1, visibleBottom + remainingHalo);
+      for (let y = top; y <= bottom; y += 1) {
         const py = samplePosition[y];
-        for (let x = 0; x < rasterSide; x += 1) {
+        for (let x = left; x <= right; x += 1) {
           const pixel = y * rasterSide + x;
           const px = samplePosition[x];
           let best = current[pixel];
@@ -507,6 +540,7 @@ function createMorphFrameRenderer(colors, side, rasterSide = side * 2, outputWid
         }
       }
       [current, next] = [next, current];
+      remainingHalo -= steps[stepIndex + 1] ?? 0;
     }
 
     for (let y = 0; y < outputHeight; y += 1) {
@@ -525,6 +559,45 @@ export function renderMorphFrame(positions, colors, side, rasterSide = side * 2,
   return createMorphFrameRenderer(colors, side, rasterSide, outputWidth, outputHeight, aspect)(positions);
 }
 
+export function cropChangedFrame(frame, previous, width, height, transparentIndex = -1) {
+  if (frame.length !== width * height || (previous && previous.length !== frame.length)) {
+    throw new TypeError('动图帧尺寸不匹配。');
+  }
+  if (!Number.isInteger(transparentIndex) || transparentIndex < -1 || transparentIndex > 255) {
+    throw new RangeError('透明调色板索引无效。');
+  }
+  if (!previous) return { x: 0, y: 0, width, height, indices: frame };
+
+  let left = width;
+  let top = height;
+  let right = -1;
+  let bottom = -1;
+  for (let y = 0; y < height; y += 1) {
+    let offset = y * width;
+    for (let x = 0; x < width; x += 1, offset += 1) {
+      if (frame[offset] === previous[offset]) continue;
+      left = Math.min(left, x);
+      top = Math.min(top, y);
+      right = Math.max(right, x);
+      bottom = Math.max(bottom, y);
+    }
+  }
+  if (right < 0) return { x: 0, y: 0, width: 1, height: 1, indices: frame.subarray(0, 1) };
+
+  const cropWidth = right - left + 1;
+  const cropHeight = bottom - top + 1;
+  const indices = new Uint8Array(cropWidth * cropHeight);
+  if (transparentIndex >= 0) indices.fill(transparentIndex);
+  for (let y = 0; y < cropHeight; y += 1) {
+    let sourceOffset = (top + y) * width + left;
+    let targetOffset = y * cropWidth;
+    for (let x = 0; x < cropWidth; x += 1, sourceOffset += 1, targetOffset += 1) {
+      if (transparentIndex < 0 || frame[sourceOffset] !== previous[sourceOffset]) indices[targetOffset] = frame[sourceOffset];
+    }
+  }
+  return { x: left, y: top, width: cropWidth, height: cropHeight, indices };
+}
+
 export async function createMorphGif(source, target, side, aspect, width, height, settings, onProgress, yieldControl = () => new Promise(resolve => setTimeout(resolve, 0))) {
   const mapping = await assignTargetPixels(source, target, side, {
     proximityImportance: settings.proximityImportance * (GRID_SIZE / side) ** 2,
@@ -532,12 +605,13 @@ export async function createMorphGif(source, target, side, aspect, width, height
     yieldControl,
   });
   const rasterSide = Math.max(side, Math.round(OUTPUT_SIZE * side / GRID_SIZE));
-  const { palette, indices: colors } = buildSourcePalette(source);
+  const transparentIndex = 255;
+  const { palette, indices: colors } = buildSourcePalette(source, transparentIndex);
   const positions = new Float32Array(mapping.length * 2);
   const velocities = new Float32Array(mapping.length * 2);
   const destinations = new Float32Array(mapping.length * 2);
   const ages = new Uint16Array(mapping.length);
-  const bins = Array.from({ length: mapping.length }, () => []);
+  const bins = createSimulationBins(mapping.length);
   const acceleration = new Float32Array(mapping.length * 2);
   const renderFrame = createMorphFrameRenderer(colors, side, rasterSide, width, height, aspect);
   for (let sourceIndex = 0; sourceIndex < mapping.length; sourceIndex += 1) {
@@ -547,13 +621,18 @@ export async function createMorphGif(source, target, side, aspect, width, height
     destinations[sourceIndex * 2 + 1] = Math.floor(mapping[sourceIndex] / side) + 0.5;
   }
   const blocks = [gifHeader(width, height, palette, 0)];
+  let previousFrame = null;
 
   for (let step = 0; step < 20; step += 1) updateMorphSimulation(positions, velocities, destinations, ages, side, bins, acceleration);
   for (let frame = 0; frame < FRAMES; frame += 1) {
     if (frame > 0) for (let step = 0; step < 14; step += 1) updateMorphSimulation(positions, velocities, destinations, ages, side, bins, acceleration);
-    blocks.push(gifFrameBlock(renderFrame(positions), {
-      width, height, delay: FRAME_DELAY, minimum: 8, disposal: 2,
+    const pixels = renderFrame(positions);
+    const crop = cropChangedFrame(pixels, previousFrame, width, height, transparentIndex);
+    blocks.push(gifFrameBlock(crop.indices, {
+      x: crop.x, y: crop.y, width: crop.width, height: crop.height,
+      delay: FRAME_DELAY, minimum: 8, transparent: frame > 0 ? transparentIndex : -1, disposal: 1,
     }));
+    previousFrame = pixels.slice();
     onProgress?.(0.05 + 0.95 * (frame + 1) / FRAMES);
     await yieldControl();
   }
@@ -580,7 +659,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     presetFile: $('#morph-preset-file'), presetPicker: $('#morph-preset-picker'), direction: $('#morph-direction'),
     resolution: $('#morph-resolution'), resolutionValue: $('#morph-resolution-value'),
     proximity: $('#morph-proximity'), proximityValue: $('#morph-proximity-value'),
-    generate: $('#morph-generate'), download: $('#morph-download'), downloadAll: $('#morph-download-all'), status: $('#morph-status'),
+    generate: $('#morph-generate'), download: $('#morph-download'), downloadWebP: $('#morph-download-webp'), downloadAll: $('#morph-download-all'), status: $('#morph-status'),
     sourcePreview: $('#morph-source-preview'), sourceEmpty: $('#morph-source-empty'), sourceMeta: $('#morph-source-meta'),
     sourceCrop: document.querySelector('[data-morph-crop="source"]'), sourceCropPreview: $('#morph-source-crop-preview'),
     outputPreview: $('#morph-output-preview'), outputEmpty: $('#morph-output-empty'), outputMeta: $('#morph-output-meta'),
@@ -588,7 +667,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     sourceViewport: $('#morph-source-viewport'), outputViewport: $('#morph-output-viewport'),
     resultFooter: $('#morph-result-footer'), resultMessage: $('#morph-result-message'),
   };
-  const state = { entries: [], activeId: null, presets: [], presetKey: null, busy: false };
+  const state = { entries: [], activeId: null, presets: [], presetKey: null, busy: false, webpBusy: false };
   let morphWorker;
   let morphRequest;
   const activeEntry = () => state.entries.find(entry => entry.id === state.activeId) ?? null;
@@ -599,12 +678,13 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     { key: 'output', viewport: elements.outputViewport, image: elements.outputPreview },
   ];
 
-  function generateInWorker(source, target, side, aspect, width, height, settings, onProgress) {
+  function generateInWorker(entry, source, target, side, aspect, width, height, settings, onProgress) {
     morphWorker ??= new Worker(new URL('./morph-worker.mjs', import.meta.url), { type: 'module' });
     return new Promise((resolve, reject) => {
       const id = createId();
-      morphRequest = { id, resolve, reject, onProgress };
-      morphWorker.onmessage = ({ data }) => {
+      const worker = morphWorker;
+      morphRequest = { id, entry, resolve, reject, onProgress };
+      worker.onmessage = ({ data }) => {
         if (data.id !== morphRequest?.id) return;
         if (data.type === 'progress') morphRequest.onProgress?.(data.fraction);
         else {
@@ -614,23 +694,37 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
           else request.resolve(data.result);
         }
       };
-      morphWorker.onerror = event => {
+      worker.onerror = event => {
+        if (morphRequest?.id !== id) return;
         const request = morphRequest;
         morphRequest = null;
-        morphWorker.terminate();
-        morphWorker = null;
+        worker.terminate();
+        if (morphWorker === worker) morphWorker = null;
         request?.reject(new Error(event.message || '动图处理线程失败。'));
       };
       try {
-        morphWorker.postMessage({
+        worker.postMessage({
           id, source: source.data.buffer, target: target.data.buffer,
           side, aspect, width, height, settings,
         }, [source.data.buffer, target.data.buffer]);
       } catch (error) {
         morphRequest = null;
+        worker.terminate();
+        if (morphWorker === worker) morphWorker = null;
         reject(error);
       }
     });
+  }
+
+  function cancelRunningEntry(entry) {
+    if (morphRequest?.entry !== entry) return;
+    const request = morphRequest;
+    morphRequest = null;
+    morphWorker?.terminate();
+    morphWorker = null;
+    const error = new Error('已移除处理中条目。');
+    error.name = 'AbortError';
+    request.reject(error);
   }
 
   function updatePreview(view) {
@@ -774,6 +868,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     if (entry.resultUrl) URL.revokeObjectURL(entry.resultUrl);
     entry.resultUrl = null;
     entry.result = null;
+    entry.webpResult = null;
   }
 
   function renderEntry(entry) {
@@ -791,7 +886,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     ring.disabled = state.busy || entry.status === 'loading';
     ring.title = entry.status === 'done' ? `重新生成：${entry.file.name}` : `生成：${entry.file.name}`;
     download.disabled = !ready(entry);
-    remove.disabled = state.busy;
+    remove.disabled = false;
     if (image.getAttribute('src') !== entry.thumbUrl) image.src = entry.thumbUrl;
   }
 
@@ -818,6 +913,8 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
       elements.resultMessage.textContent = entry?.label ?? '尚未生成';
     }
     elements.download.disabled = !ready(entry);
+    elements.downloadWebP.disabled = state.busy || state.webpBusy || !ready(entry);
+    elements.downloadWebP.textContent = state.webpBusy ? '正在编码 WebP…' : '下载 WebP（部分预览器可能不播放动画）';
     elements.downloadAll.hidden = state.entries.filter(ready).length < 2;
     elements.downloadAll.disabled = state.busy || !state.entries.some(ready);
     for (const item of state.entries) renderEntry(item);
@@ -865,8 +962,9 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
   }
 
   function removeEntry(entry) {
-    if (state.busy) return;
     const index = state.entries.indexOf(entry);
+    if (index < 0) return;
+    cancelRunningEntry(entry);
     const wasActive = activeEntry() === entry;
     state.entries.splice(index, 1);
     entry.ui.row.remove();
@@ -1052,8 +1150,27 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     entry.progress = 0;
     syncActions();
     let sourceBitmap;
+    let workerProgress = 0;
+    let displayedProgress = 0;
+    const startedAt = performance.now();
+    const refreshProgress = () => {
+      if (!state.entries.includes(entry) || entry.status !== 'processing') return;
+      displayedProgress = Math.min(0.99, Math.max(displayedProgress, displayProgress(workerProgress, performance.now() - startedAt)));
+      entry.progress = displayedProgress;
+      entry.label = `正在生成 GIF · ${Math.round(entry.progress * 100)}%`;
+      setStatus(entry.label);
+      renderActive();
+    };
+    const progressTimer = setInterval(refreshProgress, 100);
     try {
       sourceBitmap = await createImageBitmap(entry.file);
+      if (!state.entries.includes(entry)) {
+        sourceBitmap.close();
+        sourceBitmap = null;
+        const error = new Error('已移除处理中条目。');
+        error.name = 'AbortError';
+        throw error;
+      }
       const side = Number(elements.resolution.value);
       const aspect = entry.width / entry.height;
       const { width, height } = outputDimensions(entry.width, entry.height);
@@ -1065,13 +1182,11 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
       if (direction === 'reverse') [source, target] = [target, source];
       entry.label = '正在计算网格迁移…';
       syncActions();
-      const result = await generateInWorker(source, target, side, aspect, width, height, {
+      const result = await generateInWorker(entry, source, target, side, aspect, width, height, {
         proximityImportance: Number(elements.proximity.value),
       }, fraction => {
-        entry.progress = displayProgress(fraction);
-        entry.label = `正在生成 GIF · ${Math.round(entry.progress * 100)}%`;
-        setStatus(entry.label);
-        renderActive();
+        workerProgress = fraction;
+        refreshProgress();
       });
       if (!state.entries.includes(entry)) return;
       if (state.presetKey !== presetKey) throw new Error('参考图已更新，结果未保存，请重新生成。');
@@ -1088,10 +1203,14 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
       onGenerated();
     } catch (error) {
       if (sourceBitmap) sourceBitmap.close();
-      entry.status = 'error';
-      entry.label = error.message;
-      entry.progress = 0;
+      if (state.entries.includes(entry)) {
+        entry.status = 'error';
+        entry.label = error.message;
+        entry.progress = 0;
+      }
       throw error;
+    } finally {
+      clearInterval(progressTimer);
     }
   }
 
@@ -1100,7 +1219,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     state.busy = true;
     selectEntry(entry);
     try { await perform(entry); }
-    catch (error) { onError(error); }
+    catch (error) { if (error.name !== 'AbortError') onError(error); }
     finally { state.busy = false; syncActions(); }
   }
 
@@ -1113,9 +1232,10 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     state.busy = true;
     syncActions();
     for (const entry of queue) {
+      if (!state.entries.includes(entry)) continue;
       selectEntry(entry);
       try { await perform(entry); }
-      catch (error) { onError(error); }
+      catch (error) { if (error.name !== 'AbortError') onError(error); }
     }
     state.busy = false;
     syncActions();
@@ -1132,6 +1252,27 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
       downloadBlob(zip, 'naiwa-morph-animations.zip');
     } catch (error) { onError(error); }
     finally { elements.downloadAll.textContent = '下载全部 GIF（ZIP）'; syncActions(); }
+  }
+
+  async function downloadCurrentWebP() {
+    const entry = activeEntry();
+    if (!ready(entry) || state.busy || state.webpBusy) return;
+    state.webpBusy = true;
+    syncActions();
+    try {
+      if (!entry.webpResult) {
+        entry.webpResult = await createAnimatedWebP(entry.result, {
+          quality: 0.65,
+          onProgress: fraction => setStatus(`正在编码 WebP · ${Math.round(fraction * 100)}%`),
+        });
+      }
+      if (state.entries.includes(entry)) downloadBlob(entry.webpResult, `${stem(entry.file)}-naiwa-morph.webp`);
+    } catch (error) {
+      onError(error);
+    } finally {
+      state.webpBusy = false;
+      syncActions();
+    }
   }
 
   elements.sourcePicker.addEventListener('click', () => elements.sourceFile.click());
@@ -1191,6 +1332,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     const entry = activeEntry();
     if (ready(entry)) downloadBlob(entry.result, `${stem(entry.file)}-naiwa-morph.gif`);
   });
+  elements.downloadWebP.addEventListener('click', downloadCurrentWebP);
   elements.downloadAll.addEventListener('click', downloadAll);
   elements.direction.addEventListener('change', () => invalidateResults());
   for (const key of ['source', 'target']) {

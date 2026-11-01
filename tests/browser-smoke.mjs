@@ -148,9 +148,10 @@ applicationChecks: try {
   if (process.argv.includes('--morph-only')) {
     await evaluate(`document.querySelector('.tutorial-close').click()`);
     await evaluate(`document.querySelector('[data-view="morph"]').click()`);
-    await waitFor(`document.querySelectorAll('#morph-presets .morph-preset').length===5`);
+    await waitFor(`document.querySelectorAll('#morph-presets .morph-preset').length===6`);
     const presetState = await evaluate(`(()=>({count:document.querySelectorAll('#morph-presets .morph-preset').length,animated:[...document.querySelectorAll('#morph-presets img')].some(image=>image.src.endsWith('.gif')),names:[...document.querySelectorAll('#morph-presets .morph-preset span')].map(label=>label.textContent),selected:document.querySelector('#morph-presets .morph-preset[aria-checked="true"] span')?.textContent,highlighted:document.querySelectorAll('#morph-presets .morph-preset.is-active').length}))()`);
-    if (presetState.count !== 5 || presetState.animated || !presetState.names.includes('Kobe') || presetState.selected !== '奶蛙' || presetState.highlighted !== 1) throw new Error(`Morph references must include Kobe and one visible selection: ${JSON.stringify(presetState)}`);
+    if (presetState.count !== 6 || presetState.animated || !presetState.names.includes('Kobe') || !presetState.names.includes('Obama') || presetState.selected !== '奶蛙' || presetState.highlighted !== 1) throw new Error(`Morph references must include Kobe, Obama and one visible selection: ${JSON.stringify(presetState)}`);
+    await waitFor(`(()=>{const button=[...document.querySelectorAll('#morph-presets .morph-preset')].find(item=>item.querySelector('span').textContent==='Obama'),image=button?.querySelector('img');return image?.complete&&image.naturalWidth>0})()`);
     if (!await evaluate(`document.querySelector('#morph-resolution').value==='128'&&document.querySelector('#morph-proximity').value==='13'&&document.querySelectorAll('.morph-crop [data-crop-axis]').length===6`)) throw new Error('Morph detail and proximity sliders must have stable defaults alongside independent framing controls');
 
     const dragFixture = fileURLToPath(new URL('./fixtures/static/4.jpg', import.meta.url));
@@ -189,7 +190,19 @@ applicationChecks: try {
     if (await evaluate(`document.querySelectorAll('#morph-source-list .batch-item').length!==0`)) throw new Error('Animated source was accepted');
     await setInputFile('#morph-preset-file', animatedFixture);
     await waitFor(`document.querySelector('#toast').textContent.includes('动图')`);
-    if (await evaluate(`document.querySelectorAll('#morph-presets .morph-preset').length!==5`)) throw new Error('Animated reference was accepted');
+    if (await evaluate(`document.querySelectorAll('#morph-presets .morph-preset').length!==6`)) throw new Error('Animated reference was accepted');
+
+    const cancellationSources = [fileURLToPath(new URL('./fixtures/static/3.jpg', import.meta.url)), fileURLToPath(new URL('./fixtures/static/4.jpg', import.meta.url))];
+    await setInputFile('#morph-source-file', cancellationSources);
+    await waitFor(`document.querySelectorAll('#morph-source-list .batch-item[data-status="idle"]').length===2`);
+    await evaluate(`(()=>{const input=document.querySelector('#morph-resolution');input.value='64';input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    await evaluate(`document.querySelector('#morph-generate').click()`);
+    await waitFor(`(()=>{const row=document.querySelector('#morph-source-list .batch-item[data-status="processing"]');return row&&Number(row.querySelector('[role="progressbar"]').getAttribute('aria-valuenow'))>0})()`);
+    if (!await evaluate(`!document.querySelector('#morph-source-list .batch-item[data-status="processing"] .batch-remove').disabled`)) throw new Error('A converting morph item must remain removable');
+    await evaluate(`document.querySelector('#morph-source-list .batch-item[data-status="processing"] .batch-remove').click()`);
+    await waitFor(`document.querySelectorAll('#morph-source-list .batch-item[data-status="done"]').length===1&&document.querySelectorAll('#morph-source-list .batch-item').length===1`);
+    await evaluate(`document.querySelector('#morph-source-list .batch-remove').click()`);
+    await waitFor(`document.querySelectorAll('#morph-source-list .batch-item').length===0`);
 
     const sources = [fileURLToPath(new URL('./fixtures/static/1.jpg', import.meta.url)), fileURLToPath(new URL('./fixtures/static/2.jpg', import.meta.url))];
     await setInputFile('#morph-source-file', sources);
@@ -198,14 +211,32 @@ applicationChecks: try {
     if (targetFit.outer.some((channel,index)=>Math.abs(channel-targetFit.nearEdge[index])>8) || targetFit.inner.every(channel => channel > 245)) throw new Error(`The reference edge color must extend seamlessly into the image frame: ${JSON.stringify(targetFit)}`);
     await evaluate(`(()=>{const input=document.querySelector('#morph-resolution');input.value='64';input.dispatchEvent(new Event('input',{bubbles:true}))})()`);
     await setInputFile('#morph-preset-file', fileURLToPath(new URL('./fixtures/static/3.jpg', import.meta.url)));
-    await waitFor(`document.querySelectorAll('#morph-presets .morph-preset').length===6&&document.querySelector('#morph-preset-name').textContent.includes('3')&&document.querySelectorAll('#morph-presets .morph-preset.is-active[aria-checked="true"]').length===1`);
+    await waitFor(`document.querySelectorAll('#morph-presets .morph-preset').length===7&&document.querySelector('#morph-preset-name').textContent.includes('3')&&document.querySelectorAll('#morph-presets .morph-preset.is-active[aria-checked="true"]').length===1`);
     await evaluate(`document.querySelector('#morph-presets .preset-remove').click()`);
-    await waitFor(`document.querySelectorAll('#morph-presets .morph-preset').length===5`);
+    await waitFor(`document.querySelectorAll('#morph-presets .morph-preset').length===6`);
+    if (!await evaluate(`(()=>{const button=[...document.querySelectorAll('#morph-presets .morph-preset')].find(item=>item.querySelector('span').textContent==='Obama');button.click();return button.classList.contains('is-active')&&document.querySelector('#morph-preset-name').textContent==='Obama'})()`)) throw new Error('The Obama reference must be selectable for morph generation');
     await evaluate(`document.querySelector('#morph-generate').click()`);
     await waitFor(`document.querySelectorAll('#morph-source-list .batch-item[data-status="done"]').length===2`);
     if (!await evaluate(`!document.querySelector('#morph-generate').disabled&&document.querySelector('#morph-generate').textContent.includes('重新生成全部')`)) throw new Error('Completed morph batches must remain regeneratable');
-    const generated = await evaluate(`(async()=>{const image=document.querySelector('#morph-output-preview'),source=document.querySelector('#morph-source-preview'),blob=await fetch(image.src).then(response=>response.blob()),bytes=new Uint8Array(await blob.arrayBuffer()),{parseGif,gifFrames,decodeIndices}=await import('./src/gif-codec.mjs'),gif=parseGif(bytes),first=gif.frames[0],firstIndices=decodeIndices(first),transparentPixels=first.transparent<0?0:firstIndices.filter(index=>index===first.transparent).length;let initial=null,last=null,frameIndex=0;for(const frame of gifFrames(gif)){if(frameIndex===0)initial=frame.data.slice();if(frameIndex===gif.frames.length-1)last=frame.data.slice();frameIndex++}const endpointChanges=initial.reduce((sum,value,index)=>sum+(value!==last[index]?1:0),0);return {mime:blob.type,signature:String.fromCharCode(...bytes.subarray(0,6)),frames:gif.frames.length,loop:gif.loop,delays:[...new Set(gif.frames.map(frame=>frame.delay))],duration:gif.duration,width:gif.width,height:gif.height,sourceWidth:source.naturalWidth,sourceHeight:source.naturalHeight,transparent:first.transparent,transparentPixels,endpointChanges,paletteColors:gif.palette.length/3,meta:document.querySelector('#morph-output-meta').textContent}})()`);
+    const generated = await evaluate(`(async()=>{const image=document.querySelector('#morph-output-preview'),source=document.querySelector('#morph-source-preview'),blob=await fetch(image.src).then(response=>response.blob()),bytes=new Uint8Array(await blob.arrayBuffer()),{parseGif,gifFrames,decodeIndices}=await import('./src/gif-codec.mjs'),gif=parseGif(bytes),first=gif.frames[0],firstIndices=decodeIndices(first),transparentPixels=first.transparent<0?0:firstIndices.filter(index=>index===first.transparent).length;let initial=null,last=null,frameIndex=0;for(const frame of gifFrames(gif)){if(frameIndex===0)initial=frame.data.slice();if(frameIndex===gif.frames.length-1)last=frame.data.slice();frameIndex++}const endpointChanges=initial.reduce((sum,value,index)=>sum+(value!==last[index]?1:0),0);return {mime:blob.type,blobBytes:blob.size,signature:String.fromCharCode(...bytes.subarray(0,6)),frames:gif.frames.length,loop:gif.loop,delays:[...new Set(gif.frames.map(frame=>frame.delay))],duration:gif.duration,width:gif.width,height:gif.height,sourceWidth:source.naturalWidth,sourceHeight:source.naturalHeight,transparent:first.transparent,transparentPixels,endpointChanges,paletteColors:gif.palette.length/3,meta:document.querySelector('#morph-output-meta').textContent}})()`);
     if (generated.mime !== 'image/gif' || generated.signature !== 'GIF89a' || generated.frames !== 100 || generated.loop !== 0 || JSON.stringify(generated.delays) !== JSON.stringify([8]) || generated.duration !== 800 || Math.max(generated.width, generated.height) !== 400 || Math.abs(generated.width / generated.height - generated.sourceWidth / generated.sourceHeight) > 1 / Math.min(generated.width, generated.height) || generated.transparent !== -1 || generated.transparentPixels !== 0 || generated.paletteColors !== 256 || !generated.meta.includes('100 帧') || generated.endpointChanges < 1) throw new Error(`Morph GIF must preserve the source aspect ratio, timing, opaque palette and animation: ${JSON.stringify(generated)}`);
+    if (generated.blobBytes > 2237911 / 2) throw new Error(`Morph GIF should be no more than half its previous size: ${generated.blobBytes} bytes`);
+    const webpDownloadStart = finishedDownloads.length;
+    await evaluate(`document.querySelector('#morph-download-webp').click()`);
+    const webpDeadline = Date.now() + 60000;
+    while (finishedDownloads.length === webpDownloadStart && Date.now() < webpDeadline) await new Promise(resolve => setTimeout(resolve, 100));
+    if (finishedDownloads.length === webpDownloadStart) throw new Error('Morph animated WebP did not download');
+    const webpBytes = await readFile(join(downloads, '2-naiwa-morph.webp'));
+    const animatedWebp = webpBytes.includes(Buffer.from('ANIM')) && webpBytes.includes(Buffer.from('ANMF'));
+    const webpRatio = webpBytes.length / generated.blobBytes;
+    let webpFrames = 0;
+    for (let offset = 12; offset + 8 <= webpBytes.length;) {
+      const size = webpBytes.readUInt32LE(offset + 4);
+      if (webpBytes.toString('ascii', offset, offset + 4) === 'ANMF') webpFrames += 1;
+      offset += 8 + size + (size & 1);
+    }
+    const decodedWebp = await evaluate(`(async()=>{const bytes=Uint8Array.from(atob(${JSON.stringify(webpBytes.toString('base64'))}),char=>char.charCodeAt(0)),bitmap=await createImageBitmap(new Blob([bytes],{type:'image/webp'})),canvas=document.createElement('canvas');canvas.width=bitmap.width;canvas.height=bitmap.height;canvas.getContext('2d').drawImage(bitmap,0,0);const decoded=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;bitmap.close();const image=document.querySelector('#morph-output-preview'),gifBytes=new Uint8Array(await fetch(image.src).then(response=>response.arrayBuffer())),{parseGif,gifFrames}=await import('./src/gif-codec.mjs'),original=gifFrames(parseGif(gifBytes)).next().value.data;let error=0,count=0;for(let i=0;i<decoded.length;i+=4){for(let channel=0;channel<3;channel++){error+=Math.abs(decoded[i+channel]-original[i+channel]);count++}}return {width:canvas.width,height:canvas.height,meanAbsoluteError:Number((error/count).toFixed(2))}})()`);
+    if (webpBytes.subarray(0, 4).toString('ascii') !== 'RIFF' || webpBytes.subarray(8, 12).toString('ascii') !== 'WEBP' || !animatedWebp || webpFrames !== generated.frames || decodedWebp.width !== generated.width || decodedWebp.height !== generated.height || decodedWebp.meanAbsoluteError > 20) throw new Error(`Animated WebP must decode, retain all frames and maintain its image quality: ${JSON.stringify({ webpBytes: webpBytes.length, gifBytes: generated.blobBytes, webpRatio, webpFrames, decodedWebp })}`);
     const zipStart = finishedDownloads.length;
     await evaluate(`document.querySelector('#morph-download-all').click()`);
     const zipDeadline = Date.now() + 20000;
@@ -254,6 +285,7 @@ applicationChecks: try {
     while (finishedDownloads.length === obamaDownloadStart && Date.now() < obamaDownloadDeadline) await new Promise(resolve => setTimeout(resolve, 100));
     if (finishedDownloads.length === obamaDownloadStart) throw new Error('Obama diagnostic GIF did not download');
     const obamaGifBytes = await readFile(join(downloads, 'obama-naiwa-morph.gif'));
+    if (obamaGifBytes.length > 7174767 / 2) throw new Error(`128-grid morph GIF should be no more than half its previous size: ${obamaGifBytes.length} bytes`);
     const obamaFrames = await evaluate(`(async()=>{
       const image=document.querySelector('#morph-output-preview');
       const blob=await fetch(image.src).then(response=>response.blob());
@@ -297,7 +329,7 @@ applicationChecks: try {
     if (obamaFrames.endpointChanges < 1000) throw new Error(`Obama morph must visibly transform from its first frame: ${JSON.stringify(obamaFrames)}`);
 
     if (pageErrors.length) throw new Error(`Morph runtime errors: ${pageErrors.join(' | ')}`);
-    console.log(`morph browser checks passed: ${JSON.stringify({ presets: presetState, generated, archive: archive.map(item => item.name), reverse: true, obama: { gifBytes: obamaGifBytes.length, contactSheet: obamaContactSheet, fastGenerationMilliseconds, obamaGenerationMilliseconds, endpointChanges: obamaFrames.endpointChanges, meanRgbDifferenceFromLast: obamaFrames.meanRgbDifferenceFromLast, middleMotionDelta: obamaFrames.middleMotionDelta, lateMotionDelta: obamaFrames.lateMotionDelta } })}`);
+    console.log(`morph browser checks passed: ${JSON.stringify({ presets: presetState, generated, webp: { bytes: webpBytes.length, ratio: webpRatio, frames: webpFrames, decodedWebp }, archive: archive.map(item => item.name), reverse: true, obama: { gifBytes: obamaGifBytes.length, contactSheet: obamaContactSheet, fastGenerationMilliseconds, obamaGenerationMilliseconds, endpointChanges: obamaFrames.endpointChanges, meanRgbDifferenceFromLast: obamaFrames.meanRgbDifferenceFromLast, middleMotionDelta: obamaFrames.middleMotionDelta, lateMotionDelta: obamaFrames.lateMotionDelta } })}`);
     break applicationChecks;
   }
   if (process.argv.includes('--phantom-only')) {
@@ -420,8 +452,8 @@ applicationChecks: try {
     await screenshot('naiwa-phantom-desktop-short.png');
     await command('Emulation.clearDeviceMetricsOverride');
     await screenshot('naiwa-phantom-desktop.png');
-    const cachedPresets = await evaluate(`new Promise((resolve,reject)=>{const request=indexedDB.open('naiwa-custom-presets');request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result,version=db.version,transaction=db.transaction('builtin-presets','readonly'),records=transaction.objectStore('builtin-presets').getAll();transaction.oncomplete=()=>{resolve({version,count:records.result.length,blobs:records.result.every(record=>record.blob instanceof Blob&&record.blob.size>0),gifs:records.result.filter(record=>record.blob.type==='image/gif').length});db.close()};transaction.onerror=()=>reject(transaction.error)}})`);
-    if (cachedPresets.version !== 2 || cachedPresets.count !== 7 || !cachedPresets.blobs || cachedPresets.gifs !== 2) throw new Error(`All seven builtin image files including GIFs must be cached in IndexedDB: ${JSON.stringify(cachedPresets)}`);
+    const cachedPresets = await evaluate(`new Promise((resolve,reject)=>{const request=indexedDB.open('naiwa-custom-presets');request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result,version=db.version,transaction=db.transaction('builtin-presets','readonly'),records=transaction.objectStore('builtin-presets').getAll();transaction.oncomplete=()=>{resolve({version,count:records.result.length,resourceVersions:[...new Set(records.result.map(record=>record.version))],blobs:records.result.every(record=>record.blob instanceof Blob&&record.blob.size>0),gifs:records.result.filter(record=>record.blob.type==='image/gif').length});db.close()};transaction.onerror=()=>reject(transaction.error)}})`);
+    if (cachedPresets.version !== 2 || cachedPresets.count !== 8 || !cachedPresets.resourceVersions.every(version => version === 3) || !cachedPresets.blobs || cachedPresets.gifs !== 2) throw new Error(`All eight builtin image files must be cached at the current resource version: ${JSON.stringify(cachedPresets)}`);
     trackBuiltinRequests = true;
     await command('Network.setCacheDisabled', { cacheDisabled: true });
     await command('Network.setBlockedURLs', { urls: ['*assets/images/*'] });

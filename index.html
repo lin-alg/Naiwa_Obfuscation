@@ -344,7 +344,7 @@
               <h1 id="morph-title">生成奶蛙动图</h1>
               <span class="phantom-stats" aria-live="polite">奶蛙动图生成数 <strong id="morph-count">—</strong></span>
             </div>
-            <p class="workspace-intro">选择静态原图和参考图，生成像素迁移动画 GIF。</p>
+            <p class="workspace-intro">生成奶蛙渐变动画。</p>
           </div>
         </div>
         <div class="morph-layout">
@@ -382,14 +382,14 @@
               </details>
             </section>
             <section class="control-section morph-options">
-              <div class="section-heading"><span class="step-index">03</span><h2>迁移设置</h2></div>
+              <div class="section-heading"><span class="step-index">03</span><h2>高级设置</h2></div>
               <label class="morph-range">
-                <span class="field-line"><span class="field-label">细度</span><output id="morph-resolution-value" for="morph-resolution">128 × 128</output></span>
+                <span class="field-line"><span class="field-label">精细度</span><output id="morph-resolution-value" for="morph-resolution">128 × 128</output></span>
                 <input id="morph-resolution" type="range" min="64" max="128" step="16" value="128" aria-label="动图细度">
-                <span class="range-labels preference-labels"><span>更快</span><span>更细</span></span>
+                <span class="range-labels preference-labels"><span>更快</span><span>更精细</span></span>
               </label>
               <label class="morph-range">
-                <span class="field-line"><span class="field-label">邻近权重</span><output id="morph-proximity-value" for="morph-proximity">13</output></span>
+                <span class="field-line"><span class="field-label">邻近权重（如果生成结果不像参考图，可以调到1）</span><output id="morph-proximity-value" for="morph-proximity">13</output></span>
                 <input id="morph-proximity" type="range" min="0" max="26" step="1" value="13" aria-label="像素邻近权重">
                 <span class="range-labels preference-labels"><span>更大范围迁移</span><span>更靠近原位</span></span>
               </label>
@@ -404,6 +404,7 @@
             <div class="morph-actions">
               <button class="primary-button" id="morph-generate" type="button" disabled>生成奶蛙动图</button>
               <button class="quiet-button wide-button" id="morph-download" type="button" disabled>下载当前 GIF</button>
+              <button class="quiet-button wide-button" id="morph-download-webp" type="button" disabled>下载WebP（部分预览器可能不播放动画）</button>
               <button class="quiet-button wide-button" id="morph-download-all" type="button" disabled hidden>下载全部 GIF（ZIP）</button>
               <p class="field-hint" id="morph-status" role="status" aria-live="polite">选择静态原图和参考图后即可生成。</p>
             </div>

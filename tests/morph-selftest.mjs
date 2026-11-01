@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from 'node:assert/strict';
-import { assignTargetPixels, buildSourcePalette, destinationForce, displayProgress, isAnimatedRaster, outputDimensions, renderMorphFrame, updateMorphSimulation } from '../src/morph-animation.mjs';
+import { assignTargetPixels, buildSourcePalette, createSimulationBins, cropChangedFrame, destinationForce, displayProgress, isAnimatedRaster, outputDimensions, renderMorphFrame, updateMorphSimulation } from '../src/morph-animation.mjs';
 
 const image = colors => ({
   width: 2,
@@ -24,19 +24,43 @@ assert.deepEqual(outputDimensions(900, 1600), { width: 225, height: 400 }, 'port
 assert.ok(displayProgress(0.2) > 0.2, 'the progress display moves ahead early');
 assert.equal(displayProgress(0.6), 0.6, 'the progress display reaches its slow phase at 60%');
 assert.ok(displayProgress(0.8) < 0.8, 'the progress display advances slowly beyond 60%');
+assert.ok(displayProgress(0, 5000) >= 0.6 && displayProgress(0, 5000) < 1, 'estimated progress reaches 60% within five seconds without claiming completion');
+assert.ok(displayProgress(0.9, 1000) < 0.2, 'a late worker update cannot jump the visual ramp to 90%');
+assert.ok(displayProgress(0, 1000) >= 0.01, 'estimated progress advances at least one point after one second');
+assert.ok(displayProgress(0, 6000) >= 0.61, 'estimated progress continues advancing one point per second after the five-second ramp');
+assert.equal(displayProgress(0, 100000), 0.99, 'estimated progress can wait at 99% but never claims completion');
+for (let elapsed = 100; elapsed <= 100000; elapsed += 100) {
+  assert.ok(displayProgress(0, elapsed) >= displayProgress(0, elapsed - 100), `estimated progress is monotonic at ${elapsed} ms`);
+}
+assert.equal(displayProgress(1, 0), 1, 'only completed work reaches 100%');
+
+const previousFrame = Uint8Array.from({ length: 12 }, (_, index) => index);
+const changedFrame = previousFrame.slice();
+changedFrame[6] = 99;
+changedFrame[11] = 88;
+const changedCrop = cropChangedFrame(changedFrame, previousFrame, 4, 3);
+assert.deepEqual(changedCrop, { x: 2, y: 1, width: 2, height: 2, indices: Uint8Array.of(99, 7, 10, 88) }, 'delta frames crop to the exact changed-pixel bounds');
+const sparseCrop = cropChangedFrame(changedFrame, previousFrame, 4, 3, 255);
+assert.deepEqual(sparseCrop.indices, Uint8Array.of(99, 255, 255, 88), 'unchanged pixels inside the frame rectangle become transparent skips');
+const reconstructedFrame = previousFrame.slice();
+for (let y = 0; y < changedCrop.height; y += 1) {
+  reconstructedFrame.set(changedCrop.indices.subarray(y * changedCrop.width, (y + 1) * changedCrop.width), (changedCrop.y + y) * 4 + changedCrop.x);
+}
+assert.deepEqual(reconstructedFrame, changedFrame, 'compositing a delta rectangle reconstructs the full frame exactly');
+assert.deepEqual(cropChangedFrame(previousFrame, previousFrame, 4, 3), { x: 0, y: 0, width: 1, height: 1, indices: Uint8Array.of(0) }, 'identical frames use a one-pixel timing frame');
 
 assert.equal(destinationForce(0), 0, 'destination pull begins at zero');
 assert.equal(destinationForce(120), destinationForce(60) * 8, 'destination pull follows Obamify’s cubic acceleration curve');
 assert.equal(destinationForce(100000), 1000, 'destination pull stays bounded at long runtimes');
 const fastPositions = Float32Array.of(10, 10);
-updateMorphSimulation(fastPositions, new Float32Array(2), Float32Array.of(20, 10), Uint16Array.of(1000), 32, Array.from({ length: 32 * 32 }, () => []), new Float32Array(2));
+updateMorphSimulation(fastPositions, new Float32Array(2), Float32Array.of(20, 10), Uint16Array.of(1000), 32, createSimulationBins(32 * 32), new Float32Array(2));
 assert.ok(fastPositions[0] - 10 > 1.92, 'particle velocity follows the uncapped Obamify simulation');
 
 const trajectoryPositions = Float32Array.of(1.5, 1.5);
 const trajectoryVelocities = new Float32Array(2);
 const trajectoryDestinations = Float32Array.of(15.5, 15.5);
 const trajectoryAges = new Uint16Array(1);
-const trajectoryBins = Array.from({ length: 32 * 32 }, () => []);
+const trajectoryBins = createSimulationBins(32 * 32);
 const trajectoryAcceleration = new Float32Array(2);
 const frameTravel = [];
 for (let frame = 0; frame < 100; frame += 1) {
@@ -53,7 +77,7 @@ const neighborPositions = Float32Array.of(10, 10, 10.5, 10);
 const neighborVelocities = new Float32Array(4);
 const neighborDestinations = neighborPositions.slice();
 const neighborAges = new Uint16Array(2);
-updateMorphSimulation(neighborPositions, neighborVelocities, neighborDestinations, neighborAges, 32, Array.from({ length: 32 * 32 }, () => []), new Float32Array(4));
+updateMorphSimulation(neighborPositions, neighborVelocities, neighborDestinations, neighborAges, 32, createSimulationBins(32 * 32), new Float32Array(4));
 const neighborSeparation = Math.hypot(neighborPositions[0] - neighborPositions[2], neighborPositions[1] - neighborPositions[3]);
 assert.ok(neighborSeparation > 0.51 && neighborSeparation < 0.53, 'neighbor forces are scaled from the 400-pixel simulation into grid coordinates');
 
@@ -61,7 +85,7 @@ const positions = Float32Array.of(1, 1, 1, 1);
 const velocities = new Float32Array(4);
 const destinations = Float32Array.of(0.5, 0.5, 1.5, 0.5);
 const ages = new Uint16Array(2);
-const bins = Array.from({ length: 4 }, () => []);
+const bins = createSimulationBins(4);
 updateMorphSimulation(positions, velocities, destinations, ages, 2, bins, new Float32Array(4));
 assert.ok(Math.hypot(positions[0] - positions[2], positions[1] - positions[3]) > 0.00001, 'coincident particles receive a deterministic separating force');
 assert.deepEqual([...ages], [1, 1], 'each simulation step advances the particle age');
