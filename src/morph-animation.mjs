@@ -649,6 +649,25 @@ function downloadBlob(blob, name) {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
+function createDownloadIcon() {
+  const namespace = 'http://www.w3.org/2000/svg';
+  const icon = document.createElementNS(namespace, 'svg');
+  icon.setAttribute('viewBox', '0 0 24 24');
+  icon.setAttribute('fill', 'none');
+  icon.setAttribute('stroke', 'currentColor');
+  icon.setAttribute('stroke-width', '2');
+  icon.setAttribute('stroke-linecap', 'round');
+  icon.setAttribute('stroke-linejoin', 'round');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.setAttribute('focusable', 'false');
+  for (const d of ['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'm7 10 5 5 5-5', 'M12 15V3']) {
+    const path = document.createElementNS(namespace, 'path');
+    path.setAttribute('d', d);
+    icon.append(path);
+  }
+  return icon;
+}
+
 const stem = file => file.name.replace(/\.[^.]+$/, '') || 'image';
 const formatBytes = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(2)} MB` : `${(bytes / 1024).toFixed(1)} KB`;
 
@@ -660,6 +679,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     resolution: $('#morph-resolution'), resolutionValue: $('#morph-resolution-value'),
     proximity: $('#morph-proximity'), proximityValue: $('#morph-proximity-value'),
     generate: $('#morph-generate'), download: $('#morph-download'), downloadWebP: $('#morph-download-webp'), downloadAll: $('#morph-download-all'), status: $('#morph-status'),
+    result: document.querySelector('.morph-result'), entryNavigation: $('#morph-entry-nav'), previous: $('#morph-previous'), next: $('#morph-next'), entryPosition: $('#morph-entry-position'),
     sourcePreview: $('#morph-source-preview'), sourceEmpty: $('#morph-source-empty'), sourceMeta: $('#morph-source-meta'),
     sourceCrop: document.querySelector('[data-morph-crop="source"]'), sourceCropPreview: $('#morph-source-crop-preview'),
     outputPreview: $('#morph-output-preview'), outputEmpty: $('#morph-output-empty'), outputMeta: $('#morph-output-meta'),
@@ -767,6 +787,11 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
       view.image.removeAttribute('src');
       resetPreview(view);
     }
+  }
+
+  function scrollToResultOnMobile() {
+    if (!matchMedia('(max-width: 640px)').matches || !state.entries.some(ready)) return;
+    requestAnimationFrame(() => elements.result.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth', block: 'start' }));
   }
 
   function cropValues(key) {
@@ -892,6 +917,11 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
 
   function renderActive() {
     const entry = activeEntry();
+    const index = state.entries.indexOf(entry);
+    elements.entryNavigation.hidden = state.entries.length < 2;
+    elements.entryPosition.textContent = entry ? `${index + 1} / ${state.entries.length}` : `0 / ${state.entries.length}`;
+    elements.previous.disabled = state.busy || index <= 0;
+    elements.next.disabled = state.busy || index < 0 || index >= state.entries.length - 1;
     elements.sourcePreview.hidden = !entry;
     elements.sourceEmpty.hidden = Boolean(entry);
     elements.outputPreview.hidden = !entry?.resultUrl;
@@ -914,7 +944,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     }
     elements.download.disabled = !ready(entry);
     elements.downloadWebP.disabled = state.busy || state.webpBusy || !ready(entry);
-    elements.downloadWebP.textContent = state.webpBusy ? '正在编码 WebP…' : '下载 WebP（部分预览器可能不播放动画）';
+    elements.downloadWebP.textContent = state.webpBusy ? '正在编码 WebP…' : '下载 WebP';
     elements.downloadAll.hidden = state.entries.filter(ready).length < 2;
     elements.downloadAll.disabled = state.busy || !state.entries.some(ready);
     for (const item of state.entries) renderEntry(item);
@@ -1009,7 +1039,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     const download = document.createElement('button');
     download.type = 'button';
     download.className = 'batch-download';
-    download.textContent = '↓';
+    download.append(createDownloadIcon());
     download.title = `下载 ${entry.file.name}`;
     download.setAttribute('aria-label', download.title);
     download.addEventListener('click', () => { if (ready(entry)) downloadBlob(entry.result, `${stem(entry.file)}-naiwa-morph.gif`); });
@@ -1220,7 +1250,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     selectEntry(entry);
     try { await perform(entry); }
     catch (error) { if (error.name !== 'AbortError') onError(error); }
-    finally { state.busy = false; syncActions(); }
+    finally { state.busy = false; syncActions(); scrollToResultOnMobile(); }
   }
 
   async function runBatch() {
@@ -1239,6 +1269,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     }
     state.busy = false;
     syncActions();
+    scrollToResultOnMobile();
   }
 
   async function downloadAll() {
@@ -1328,6 +1359,16 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     } catch (error) { onError(error); }
   });
   elements.generate.addEventListener('click', runBatch);
+  elements.previous.addEventListener('click', () => {
+    if (state.busy) return;
+    const index = state.entries.indexOf(activeEntry());
+    if (index > 0) selectEntry(state.entries[index - 1]);
+  });
+  elements.next.addEventListener('click', () => {
+    if (state.busy) return;
+    const index = state.entries.indexOf(activeEntry());
+    if (index >= 0 && index < state.entries.length - 1) selectEntry(state.entries[index + 1]);
+  });
   elements.download.addEventListener('click', () => {
     const entry = activeEntry();
     if (ready(entry)) downloadBlob(entry.result, `${stem(entry.file)}-naiwa-morph.gif`);

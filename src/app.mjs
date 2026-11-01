@@ -104,12 +104,16 @@ const phantomTank = initializePhantomTank({
     : action === 'reveal' ? previews.fit('#phantom-reveal-view .phantom-stage') : previews.apply()),
 });
 const morphAnimation = initializeMorphAnimation({
-  getPresets: () => [
-    ...PRESETS.map((preset, index) => ({ key: presetKey(preset), name: preset.name, src: preset.displaySrc ?? preset.src,
+  getPresets: () => {
+    const mapPreset = (preset, index) => ({ key: presetKey(preset), name: preset.name, src: preset.displaySrc ?? preset.src,
       image: state.presetImages[index], animated: preset.animatedRaster === true || preset.animated === true,
-      staticImage: preset.record?.blob.type !== 'image/svg+xml', remove: preset.filename ? () => removeCustomPreset(preset) : null })),
-    ...MORPH_BUILTIN_PRESETS.map((preset, index) => ({ ...preset, src: preset.displaySrc ?? preset.src, image: state.morphPresetImages[index] })),
-  ],
+      staticImage: preset.record?.blob.type !== 'image/svg+xml', remove: preset.filename ? () => removeCustomPreset(preset) : null });
+    return [
+      ...PRESETS.map((preset, index) => ({ preset, index })).filter(({ preset }) => !preset.filename).map(({ preset, index }) => mapPreset(preset, index)),
+      ...MORPH_BUILTIN_PRESETS.map((preset, index) => ({ ...preset, src: preset.displaySrc ?? preset.src, image: state.morphPresetImages[index] })),
+      ...PRESETS.map((preset, index) => ({ preset, index })).filter(({ preset }) => preset.filename).map(({ preset, index }) => mapPreset(preset, index)),
+    ];
+  },
   onCustomPreset: async file => { await loadCustomPreset(file); return presetKey(PRESETS[state.presetIndex]); },
   onError: error => showToast(error.message, true),
   onGenerated: () => analytics.recordMorph(),
@@ -704,13 +708,30 @@ if (matchMedia('(max-width: 640px)').matches) $('#output-options').open = false;
 initializeTutorial();
 const analytics = initializeAnalytics();
 
-$('.workbench').addEventListener('wheel', event => {
+const handleWorkbenchWheel = event => {
   if (matchMedia('(max-width: 640px)').matches || event.ctrlKey || !event.deltaY) return;
   const advanced = event.target.closest('#advanced-settings');
   const content = $('.advanced-content');
   const delta = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? event.deltaY * 16
     : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? event.deltaY * content.clientHeight : event.deltaY;
-  if (advanced?.open) content.scrollTop += delta;
-  else window.scrollBy(0, delta);
+  if (advanced?.open) {
+    content.scrollTop += delta;
+    event.preventDefault();
+    return;
+  }
+  for (let element = event.target.closest?.('*'); element && element !== event.currentTarget; element = element.parentElement) {
+    if (element.matches('.advanced-content')) continue;
+    const overflowY = getComputedStyle(element).overflowY;
+    if (!['auto', 'scroll', 'overlay'].includes(overflowY) || element.scrollHeight <= element.clientHeight + 1) continue;
+    const canScroll = event.deltaY < 0 ? element.scrollTop > 0 : element.scrollTop + element.clientHeight < element.scrollHeight - 1;
+    if (canScroll) {
+      element.scrollTop += delta;
+      event.preventDefault();
+      return;
+    }
+  }
+  window.scrollBy(0, delta);
   event.preventDefault();
-}, { passive: false });
+};
+$('.workbench').addEventListener('wheel', handleWorkbenchWheel, { passive: false });
+$('#morph-view').addEventListener('wheel', handleWorkbenchWheel, { passive: false });

@@ -289,6 +289,12 @@ input[type="range"] { width: 100%; height: 18px; margin: 4px 0 0; accent-color: 
 .phantom-toolbar > div { min-width: 0; display: flex; align-items: baseline; gap: 10px; }
 .phantom-toolbar strong { font-size: 12px; font-weight: 650; }
 .phantom-toolbar > div > span { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.morph-entry-nav { align-items: center !important; gap: 5px !important; flex: 0 0 auto; }
+.morph-entry-nav button { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; color: #5f592f; background: #faf8ed; border: 1px solid var(--line); border-radius: 4px; cursor: pointer; }
+.morph-entry-nav button svg { width: 16px; height: 16px; display: block; }
+.morph-entry-nav button:hover:not(:disabled) { color: var(--accent-ink); background: #fff0a0; }
+.morph-entry-nav button:disabled { color: #b1ae9e; background: #f1f1e9; cursor: not-allowed; }
+.morph-entry-nav span { min-width: 38px; color: var(--muted); font-size: 10px; text-align: center; font-variant-numeric: tabular-nums; }
 .phantom-zoom { flex: 0 0 auto; gap: 1px; padding: 2px; }
 .phantom-zoom .zoom-button { min-width: 25px; height: 23px; padding: 0 4px; }
 .phantom-zoom .zoom-fit { min-width: 38px; }
@@ -362,6 +368,8 @@ input[type="range"] { width: 100%; height: 18px; margin: 4px 0 0; accent-color: 
 .morph-preview-viewport.is-panning { cursor: grabbing; }
 .morph-image-frame img { width: auto; height: auto; max-width: min(100%, 512px); max-height: 100%; min-width: 0; min-height: 0; display: block; object-fit: contain; image-rendering: pixelated; transform: translate3d(var(--preview-pan-x, 0px), var(--preview-pan-y, 0px), 0) scale(var(--preview-scale, 1)); transform-origin: center; }
 .morph-image-frame .empty-state { z-index: 1; }
+.morph-preview-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.morph-preview-actions .quiet-button { min-width: 0; flex: 1 1 170px; margin: 0; line-height: 1.35; }
 .morph-result .phantom-result-footer { flex: 0 0 auto; }
 .morph-actions .field-hint.is-error { color: #a3432e; }
 
@@ -385,10 +393,12 @@ input[type="range"] { width: 100%; height: 18px; margin: 4px 0 0; accent-color: 
   .morph-presets { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .morph-crop { grid-template-columns: 72px minmax(0, 1fr); }
   .morph-crop-preview { width: 72px; height: 72px; }
-  .morph-result { min-height: 72vh; padding: 12px; }
-  .morph-preview-grid { display: flex; flex-direction: column; gap: 9px; }
+  .morph-result { min-height: 0; padding: 12px; }
+  .morph-preview-grid { display: flex; flex: 0 0 auto; flex-direction: column; gap: 9px; }
+  .morph-source-panel { display: none; }
   .morph-image-frame { height: min(78vw, 350px); min-height: 0; flex: 0 0 auto; }
-  .morph-preview-panel:first-child .morph-image-frame { height: min(48vw, 240px); min-height: 0; }
+  .morph-preview-actions { gap: 6px; }
+  .morph-preview-actions .quiet-button { flex-basis: 140px; }
 }
 
 @media (min-width: 641px) and (max-width: 900px) {
