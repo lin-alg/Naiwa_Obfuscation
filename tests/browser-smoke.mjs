@@ -185,12 +185,30 @@ applicationChecks: try {
     if (!await evaluate(`(()=>{const preset=[...document.querySelectorAll('#morph-presets .morph-preset')].find(button=>button.querySelector('span').textContent==='奶蛙');preset.click();return document.querySelector('#morph-preset-name').textContent==='奶蛙'&&preset.classList.contains('is-active')})()`)) throw new Error('The selected reference name and highlight must stay in sync');
 
     const animatedFixture = fileURLToPath(new URL('./fixtures/animated/2.gif', import.meta.url));
+    const animatedFixtureBytes = (await readFile(animatedFixture)).toString('base64');
     await setInputFile('#morph-source-file', animatedFixture);
-    await waitFor(`document.querySelector('#toast').textContent.includes('动图')`);
-    if (await evaluate(`document.querySelectorAll('#morph-source-list .batch-item').length!==0`)) throw new Error('Animated source was accepted');
+    await waitFor(`document.querySelector('#morph-source-list .batch-item[data-status="idle"]')`);
+    const firstFrame = await evaluate(`(async()=>{const image=document.querySelector('#morph-source-preview');await image.decode();const blob=await fetch(image.src).then(response=>response.blob()),bitmap=await createImageBitmap(blob),canvas=document.createElement('canvas');canvas.width=bitmap.width;canvas.height=bitmap.height;canvas.getContext('2d').drawImage(bitmap,0,0);const actual=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;bitmap.close();const bytes=Uint8Array.from(atob(${JSON.stringify(animatedFixtureBytes)}),char=>char.charCodeAt(0)),{parseGif,gifFrames}=await import('./src/gif-codec.mjs'),expected=gifFrames(parseGif(bytes)).next().value;let error=0,count=0;for(let i=0;i<actual.length;i+=4){for(let channel=0;channel<3;channel++){error+=Math.abs(actual[i+channel]-expected.data[i+channel]);count++}}return {mime:blob.type,label:document.querySelector('#morph-source-list .batch-item .batch-copy small').textContent,meanAbsoluteError:error/count,frameCount:parseGif(bytes).frames.length}})()`);
+    if (firstFrame.mime !== 'image/png' || !firstFrame.label.includes('首帧') || firstFrame.frameCount < 2 || firstFrame.meanAbsoluteError > 8) throw new Error(`Animated source must use a static first-frame preview: ${JSON.stringify(firstFrame)}`);
+    await evaluate(`document.querySelector('#morph-source-list .batch-remove').click()`);
+    await waitFor(`document.querySelectorAll('#morph-source-list .batch-item').length===0`);
     await setInputFile('#morph-preset-file', animatedFixture);
     await waitFor(`document.querySelector('#toast').textContent.includes('动图')`);
     if (await evaluate(`document.querySelectorAll('#morph-presets .morph-preset').length!==6`)) throw new Error('Animated reference was accepted');
+
+    await evaluate(`(()=>{const input=document.querySelector('#morph-character-input');input.value='汉';document.querySelector('#morph-character-add').click()})()`);
+    await waitFor(`document.querySelectorAll('#morph-character-presets .morph-character-choice').length===1&&document.querySelector('#morph-preset-name').textContent==='汉'`);
+    const textCharacter = await evaluate(`(async()=>{const image=document.querySelector('#morph-character-presets img'),blob=await fetch(image.src).then(response=>response.blob()),bitmap=await createImageBitmap(blob),canvas=document.createElement('canvas');canvas.width=bitmap.width;canvas.height=bitmap.height;canvas.getContext('2d').drawImage(bitmap,0,0);const pixels=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;bitmap.close();let visible=0;for(let i=3;i<pixels.length;i+=4)if(pixels[i]>0)visible++;return {mime:blob.type,visible}})()`);
+    if (textCharacter.mime !== 'image/png' || textCharacter.visible < 100) throw new Error(`Chinese character reference must render as a usable image: ${JSON.stringify(textCharacter)}`);
+    await evaluate(`(()=>{const input=document.querySelector('#morph-character-input');input.value='👨‍👩‍👧';document.querySelector('#morph-character-add').click()})()`);
+    await waitFor(`document.querySelectorAll('#morph-character-presets .morph-character-choice').length===2&&document.querySelector('#morph-preset-name').textContent==='👨‍👩‍👧'`);
+    const googleEmoji = await evaluate(`(async()=>{const image=[...document.querySelectorAll('#morph-character-presets img')].at(-1),blob=await fetch(image.src).then(response=>response.blob());return {mime:blob.type,title:image.parentElement.title,loaded:image.complete&&image.naturalWidth>0}})()`);
+    if (googleEmoji.mime !== 'image/svg+xml' || !googleEmoji.title.includes('Google Noto Emoji') || !googleEmoji.loaded) throw new Error(`Emoji reference must use the Google Noto artwork: ${JSON.stringify(googleEmoji)}`);
+    await evaluate(`(()=>{const input=document.querySelector('#morph-character-input');input.value='汉字';document.querySelector('#morph-character-add').click()})()`);
+    await waitFor(`document.querySelector('#toast').textContent.includes('一个字符')`);
+    if (await evaluate(`document.querySelectorAll('#morph-character-presets .morph-character-choice').length!==2`)) throw new Error('Multi-character text was accepted as a character reference');
+    await evaluate(`document.querySelector('#morph-presets .morph-preset span').closest('button').click()`);
+    await waitFor(`document.querySelector('#morph-preset-name').textContent==='奶蛙'`);
 
     const cancellationSources = [fileURLToPath(new URL('./fixtures/static/3.jpg', import.meta.url)), fileURLToPath(new URL('./fixtures/static/4.jpg', import.meta.url))];
     await setInputFile('#morph-source-file', cancellationSources);
@@ -238,6 +256,8 @@ applicationChecks: try {
     await evaluate(`document.querySelector('#morph-presets .preset-remove').click()`);
     await waitFor(`document.querySelectorAll('#morph-presets .morph-preset').length===6`);
     if (!await evaluate(`(()=>{const button=[...document.querySelectorAll('#morph-presets .morph-preset')].find(item=>item.querySelector('span').textContent==='Obama');button.click();return button.classList.contains('is-active')&&document.querySelector('#morph-preset-name').textContent==='Obama'})()`)) throw new Error('The Obama reference must be selectable for morph generation');
+    await evaluate(`(()=>{const input=document.querySelector('#morph-character-input');input.value='😰';document.querySelector('#morph-character-add').click()})()`);
+    await waitFor(`document.querySelector('#morph-preset-name').textContent==='😰'&&document.querySelector('#morph-character-presets .morph-character-choice[aria-pressed="true"]')`);
     await evaluate(`document.querySelector('#morph-generate').click()`);
     await waitFor(`document.querySelectorAll('#morph-source-list .batch-item[data-status="done"]').length===2`);
     if (!await evaluate(`!document.querySelector('#morph-generate').disabled&&document.querySelector('#morph-generate').textContent.includes('重新生成全部')`)) throw new Error('Completed morph batches must remain regeneratable');

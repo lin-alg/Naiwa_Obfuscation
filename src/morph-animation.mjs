@@ -2,6 +2,7 @@
 import { concatBytes, gifFrameBlock, gifHeader } from './gif-codec.mjs';
 import { createId } from './id.mjs';
 import { createAnimatedWebP } from './webp-animation.mjs';
+import { loadBuiltinPreset } from './preset-store.mjs';
 import { zipFiles } from './zip-store.mjs';
 
 const $ = selector => document.querySelector(selector);
@@ -57,11 +58,15 @@ export function isAnimatedRaster(bytes) {
   return false;
 }
 
-export async function assertStaticImage(file) {
+async function inspectImage(file) {
   if (!file || (file.type && !file.type.startsWith('image/'))) throw new Error('请选择有效的图片文件。');
-  if (file.type === 'image/svg+xml' || /\.svg$/i.test(file.name)) throw new Error('不支持 SVG，请使用静态 PNG、JPG 或 WebP 图片。');
+  if (file.type === 'image/svg+xml' || /\.svg$/i.test(file.name)) throw new Error('不支持 SVG，请使用静态位图图片。');
   const header = new Uint8Array(await file.slice(0, Math.min(file.size, 4 * 1048576)).arrayBuffer());
-  if (isAnimatedRaster(header)) throw new Error(`「${file.name}」是动图；原图和参考图都只能使用静态图片。`);
+  return isAnimatedRaster(header);
+}
+
+export async function assertStaticImage(file) {
+  if (await inspectImage(file)) throw new Error(`「${file.name}」是动图；参考图只能使用静态图片。`);
 }
 
 function frameRect(side, aspect) {
@@ -674,7 +679,7 @@ const formatBytes = bytes => bytes >= 1048576 ? `${(bytes / 1048576).toFixed(2)}
 export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerated = () => {}, onError = () => {} }) {
   const elements = {
     sourceFile: $('#morph-source-file'), sourcePicker: $('#morph-source-picker'), sourceName: $('#morph-source-name'),
-    list: $('#morph-source-list'), summary: $('#morph-batch-summary'), presets: $('#morph-presets'), presetName: $('#morph-preset-name'),
+    list: $('#morph-source-list'), summary: $('#morph-batch-summary'), presets: $('#morph-presets'), characterInput: $('#morph-character-input'), characterAdd: $('#morph-character-add'), characterPresets: $('#morph-character-presets'), presetName: $('#morph-preset-name'),
     presetFile: $('#morph-preset-file'), presetPicker: $('#morph-preset-picker'), direction: $('#morph-direction'),
     resolution: $('#morph-resolution'), resolutionValue: $('#morph-resolution-value'),
     proximity: $('#morph-proximity'), proximityValue: $('#morph-proximity-value'),
@@ -687,7 +692,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     sourceViewport: $('#morph-source-viewport'), outputViewport: $('#morph-output-viewport'),
     resultFooter: $('#morph-result-footer'), resultMessage: $('#morph-result-message'),
   };
-  const state = { entries: [], activeId: null, presets: [], presetKey: null, busy: false, webpBusy: false };
+  const state = { entries: [], activeId: null, presets: [], characterPresets: [], characterLoading: false, presetKey: null, busy: false, webpBusy: false };
   let morphWorker;
   let morphRequest;
   const activeEntry = () => state.entries.find(entry => entry.id === state.activeId) ?? null;
@@ -955,32 +960,37 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     const readyCount = entries.filter(ready).length;
     const waiting = entries.filter(entry => entry.status === 'loading').length;
     const pending = entries.filter(entry => ['idle', 'error'].includes(entry.status)).length;
-    elements.generate.disabled = state.busy || waiting > 0 || !entries.length || !activePreset();
+    elements.generate.disabled = state.busy || state.characterLoading || waiting > 0 || !entries.length || !activePreset()?.image;
     elements.generate.textContent = state.busy ? '正在生成动图…' : waiting ? '正在读取图片…'
       : !entries.length ? '生成奶蛙动图' : readyCount === entries.length ? `重新生成全部（${entries.length}）`
         : entries.length > 1 ? `生成全部奶蛙动图（${pending}）` : '生成奶蛙动图';
-    elements.sourceName.textContent = entries.length ? `继续添加图片（已有 ${entries.length} 张）` : '选择静态图片';
+    elements.sourceName.textContent = entries.length ? `继续添加图片（已有 ${entries.length} 张）` : '选择图片';
     elements.summary.textContent = entries.length ? `${readyCount}/${entries.length} 已完成${state.busy ? ' · 正在处理' : ''}${entries.some(entry => entry.status === 'error') ? ' · 失败项可重试' : ''}` : '';
-    elements.presetPicker.disabled = state.busy;
+    elements.presetPicker.disabled = state.busy || state.characterLoading;
     elements.direction.disabled = state.busy;
     elements.resolution.disabled = state.busy;
     elements.proximity.disabled = state.busy;
     for (const key of ['source', 'target']) {
       elements[`${key}Crop`].querySelectorAll('input, button').forEach(control => { control.disabled = state.busy; });
     }
-    if (state.busy) {
+    if (state.characterLoading) {
+      setStatus('正在准备字符参考图…');
+    } else if (state.busy) {
       setStatus(entries.find(entry => entry.status === 'processing')?.label ?? '正在准备动图…');
     } else if (waiting) {
-      setStatus(`正在读取 ${waiting} 张静态图片…`);
+      setStatus(`正在读取 ${waiting} 张图片…`);
     } else if (entries.some(entry => entry.status === 'error')) {
       setStatus('部分图片处理失败，可点击对应进度按钮重试。', true);
     } else if (entries.length && readyCount === entries.length) {
       setStatus(`已完成 ${readyCount} 张奶蛙动图，可下载或调整选项后重新生成。`);
     } else if (entries.length) {
-      setStatus(activePreset() ? `${entries.length} 张静态图片已载入，点击生成按钮开始处理。` : '请选择静态参考图。');
+      setStatus(activePreset()?.image ? `${entries.length} 张图片已载入，点击生成按钮开始处理。` : '请选择参考图。');
     } else {
-      setStatus(activePreset() ? '选择静态原图后即可生成。' : '选择静态原图和参考图后即可生成。');
+      setStatus(activePreset()?.image ? '选择原图后即可生成。' : '选择原图和参考图后即可生成。');
     }
+    elements.characterAdd.disabled = state.busy || state.characterLoading;
+    elements.characterInput.disabled = state.busy || state.characterLoading;
+    renderCharacterPresets();
     renderActive();
   }
 
@@ -1061,25 +1071,39 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     const rejected = [];
     for (const file of files) {
       try {
-        await assertStaticImage(file);
+        const animated = await inspectImage(file);
         const bitmap = await createImageBitmap(file);
-        const entry = {
-          id: createId(), file, width: bitmap.width, height: bitmap.height,
-          thumbUrl: '', sourceUrl: URL.createObjectURL(file), status: 'idle', label: '已载入，等待处理', progress: 0,
-        };
-        const thumb = squarePixels(bitmap, 88);
-        bitmap.close();
+        const { width, height } = bitmap;
+        let thumb;
+        let firstFrameBlob = null;
+        try {
+          thumb = squarePixels(bitmap, 88);
+          if (animated) {
+            const frameCanvas = document.createElement('canvas');
+            frameCanvas.width = bitmap.width;
+            frameCanvas.height = bitmap.height;
+            frameCanvas.getContext('2d').drawImage(bitmap, 0, 0);
+            firstFrameBlob = await new Promise(resolve => frameCanvas.toBlob(resolve, 'image/png'));
+            frameCanvas.width = frameCanvas.height = 0;
+            if (!firstFrameBlob) throw new Error(`无法读取「${file.name}」的首帧。`);
+          }
+        } finally { bitmap.close(); }
         const thumbCanvas = document.createElement('canvas');
         thumbCanvas.width = thumbCanvas.height = 88;
         thumbCanvas.getContext('2d').putImageData(thumb, 0, 0);
         const thumbBlob = await new Promise(resolve => thumbCanvas.toBlob(resolve, 'image/png'));
         thumbCanvas.width = thumbCanvas.height = 0;
         if (!thumbBlob) throw new Error(`无法创建「${file.name}」的缩略图。`);
+        const entry = {
+          id: createId(), file, width, height, animated,
+          thumbUrl: '', sourceBlob: firstFrameBlob, sourceUrl: URL.createObjectURL(firstFrameBlob ?? file),
+          status: 'idle', label: animated ? '动图已载入，使用首帧生成' : '已载入，等待处理', progress: 0,
+        };
         entry.thumbUrl = URL.createObjectURL(thumbBlob);
         accepted.push(entry);
       } catch (error) { rejected.push(error.message); }
     }
-    if (!accepted.length) throw new Error(rejected[0] ?? '请选择静态图片。');
+    if (!accepted.length) throw new Error(rejected[0] ?? '请选择图片。');
     for (const entry of accepted) {
       state.entries.push(entry);
       createEntryRow(entry);
@@ -1088,11 +1112,32 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     if (rejected.length) onError(new Error(rejected.join(' ')));
   }
 
+  function renderCharacterPresets() {
+    elements.characterPresets.replaceChildren();
+    for (const choice of state.characterPresets) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'morph-character-choice';
+      button.dataset.key = choice.key;
+      button.title = choice.emoji ? `${choice.name} · Google Noto Emoji` : choice.name;
+      button.setAttribute('aria-label', `使用字符参考图 ${choice.name}`);
+      button.setAttribute('aria-pressed', String(choice.key === state.presetKey));
+      button.disabled = state.busy || state.characterLoading;
+      const image = document.createElement('img');
+      image.src = choice.displaySrc;
+      image.alt = choice.name;
+      button.append(image);
+      button.addEventListener('click', () => setPreset(choice.key));
+      elements.characterPresets.append(button);
+    }
+  }
+
   function refreshPresets() {
     const previous = state.presetKey;
-    state.presets = getPresets().filter(preset => !preset.animated && preset.staticImage !== false && preset.image);
+    const builtins = getPresets().filter(preset => !preset.animated && preset.staticImage !== false && preset.image);
+    state.presets = [...builtins, ...state.characterPresets];
     elements.presets.replaceChildren();
-    for (const choice of state.presets) {
+    for (const choice of builtins) {
       const card = document.createElement('div');
       card.className = 'preset-card';
       const button = document.createElement('button');
@@ -1102,7 +1147,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
       button.setAttribute('role', 'radio');
       button.setAttribute('aria-checked', String(choice.key === previous));
       button.title = choice.name;
-      button.disabled = state.busy;
+      button.disabled = state.busy || state.characterLoading;
       const image = document.createElement('img');
       image.src = choice.src;
       image.alt = '';
@@ -1118,7 +1163,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
         remove.textContent = '×';
         remove.title = `删除 ${choice.name}`;
         remove.setAttribute('aria-label', remove.title);
-        remove.disabled = state.busy;
+        remove.disabled = state.busy || state.characterLoading;
         remove.addEventListener('click', async () => {
           remove.disabled = true;
           try { await choice.remove(); } catch (error) { remove.disabled = false; onError(error); }
@@ -1154,7 +1199,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
   }
 
   function setPreset(key) {
-    if (state.busy) return;
+    if (state.busy || state.characterLoading) return;
     if (state.presetKey === key) return;
     state.presetKey = key;
     const preset = activePreset();
@@ -1164,13 +1209,83 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
       button.setAttribute('aria-checked', String(selected));
       button.classList.toggle('is-active', selected);
     });
+    elements.characterPresets.querySelectorAll('.morph-character-choice').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.key === key)));
     updateCropPreview('target');
     invalidateResults('参考图已更新，请重新生成。');
   }
 
+  async function addCharacterPreset() {
+    if (state.busy || state.characterLoading) return;
+    const value = elements.characterInput.value.trim().normalize('NFC');
+    const segments = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value)];
+    if (!value || /^\s+$/u.test(value) || segments.length !== 1) {
+      onError(new Error('请输入一个字符；emoji 组合也按一个字符计算。'));
+      return;
+    }
+    const existing = state.characterPresets.find(choice => choice.character === value);
+    if (existing) {
+      elements.characterInput.value = '';
+      setPreset(existing.key);
+      return;
+    }
+    state.characterLoading = true;
+    syncActions();
+    let bitmap;
+    let decodedSourceUrl;
+    let previewBlob;
+    const emoji = /[\p{Extended_Pictographic}\p{Regional_Indicator}\uFE0F\u20E3]/u.test(value);
+    try {
+      const codepoints = Array.from(value, character => character.codePointAt(0).toString(16)).join('_');
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 128;
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      if (emoji) {
+        const source = `https://fonts.gstatic.com/s/e/notoemoji/latest/${codepoints}/emoji.svg`;
+        const blob = await loadBuiltinPreset(source);
+        decodedSourceUrl = URL.createObjectURL(blob);
+        bitmap = new Image();
+        bitmap.src = decodedSourceUrl;
+        await bitmap.decode();
+        drawContained(bitmap, context, { x: 0, y: 0, width: 128, height: 128 });
+        previewBlob = blob;
+      } else {
+        let size = 100;
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillStyle = '#28261c';
+        do {
+          context.font = `700 ${size}px "Segoe UI", "Microsoft YaHei UI", sans-serif`;
+          if (context.measureText(value).width <= 112 || size <= 28) break;
+          size -= 4;
+        } while (size > 24);
+        context.fillText(value, 64, 66, 112);
+        previewBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        if (!previewBlob) throw new Error('无法创建字符参考图。');
+      }
+      const pixels = context.getImageData(0, 0, 128, 128).data;
+      const choice = {
+        key: `character:${value}`, name: value, character: value, emoji,
+        src: URL.createObjectURL(previewBlob), displaySrc: '', image: { width: 128, height: 128, data: pixels }, staticImage: true,
+      };
+      choice.displaySrc = choice.src;
+      state.characterLoading = false;
+      state.characterPresets.push(choice);
+      refreshPresets();
+      setPreset(choice.key);
+      elements.characterInput.value = '';
+    } catch (error) {
+      onError(new Error(emoji ? `无法加载 Google Emoji 参考图：${error.message}` : error.message));
+    } finally {
+      bitmap?.close?.();
+      if (decodedSourceUrl) URL.revokeObjectURL(decodedSourceUrl);
+      state.characterLoading = false;
+      syncActions();
+    }
+  }
+
   async function perform(entry) {
     const preset = activePreset();
-    if (!preset) throw new Error('请选择静态参考图。');
+    if (!preset?.image) throw new Error('请选择参考图。');
     const presetKey = state.presetKey;
     const sourceCrop = cropValues('source');
     const targetCrop = cropValues('target');
@@ -1193,7 +1308,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     };
     const progressTimer = setInterval(refreshProgress, 100);
     try {
-      sourceBitmap = await createImageBitmap(entry.file);
+      sourceBitmap = await createImageBitmap(entry.sourceBlob ?? entry.file);
       if (!state.entries.includes(entry)) {
         sourceBitmap.close();
         sourceBitmap = null;
@@ -1245,7 +1360,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
   }
 
   async function runSingle(entry) {
-    if (state.busy || !state.entries.includes(entry)) return;
+    if (state.busy || state.characterLoading || !state.entries.includes(entry)) return;
     state.busy = true;
     selectEntry(entry);
     try { await perform(entry); }
@@ -1254,7 +1369,7 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
   }
 
   async function runBatch() {
-    if (state.busy) return;
+    if (state.busy || state.characterLoading) return;
     const entries = state.entries.filter(entry => entry.status !== 'loading');
     const restart = entries.length > 0 && entries.every(ready);
     const queue = entries.filter(entry => restart || !ready(entry));
@@ -1311,6 +1426,12 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     const files = [...elements.sourceFile.files];
     elements.sourceFile.value = '';
     try { if (files.length) await importFiles(files); } catch (error) { onError(error); }
+  });
+  elements.characterAdd.addEventListener('click', addCharacterPreset);
+  elements.characterInput.addEventListener('keydown', event => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    addCharacterPreset();
   });
   const sourceSection = elements.sourcePicker.closest('.control-section');
   sourceSection.addEventListener('dragenter', event => {

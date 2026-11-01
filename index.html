@@ -351,10 +351,10 @@
           <aside class="controls morph-controls">
             <section class="control-section">
               <div class="section-heading"><span class="step-index">01</span><h2>原图</h2></div>
-              <input id="morph-source-file" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/bmp" multiple>
+              <input id="morph-source-file" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/bmp,image/gif" multiple>
               <button class="upload-zone" id="morph-source-picker" type="button" aria-describedby="morph-source-drop-hint">
                 <span class="upload-plus" aria-hidden="true">+</span>
-                <span class="upload-copy"><strong id="morph-source-name">选择静态图片</strong><small id="morph-source-drop-hint">点击或拖入图片上传；支持多选；不支持动图</small></span>
+                <span class="upload-copy"><strong id="morph-source-name">选择图片</strong><small id="morph-source-drop-hint">点击或拖入图片上传；支持多选；动图使用首帧</small></span>
               </button>
               <div class="batch-list" id="morph-source-list" role="list" aria-label="奶蛙动图原图条目"></div>
               <details class="morph-crop" data-morph-crop="source">
@@ -370,6 +370,14 @@
             <section class="control-section">
               <div class="section-heading"><span class="step-index">02</span><h2>参考图</h2><span class="selection-label" id="morph-preset-name">奶蛙</span></div>
               <div class="morph-presets" id="morph-presets" role="radiogroup" aria-label="静态参考图"></div>
+              <div class="morph-character-field">
+                <label class="field-label" for="morph-character-input">单个字符参考图</label>
+                <div class="morph-character-entry">
+                  <input class="text-input" id="morph-character-input" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="汉字、字母、数字或 emoji" aria-label="输入一个字符作为参考图">
+                  <button class="quiet-button" id="morph-character-add" type="button">添加字符</button>
+                </div>
+                <div class="morph-character-presets" id="morph-character-presets" role="group" aria-label="已添加的字符参考图"></div>
+              </div>
               <input id="morph-preset-file" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp,image/avif,image/bmp">
               <button class="quiet-button wide-button" id="morph-preset-picker" type="button">＋ 上传自己的静态参考图</button>
               <details class="morph-crop" data-morph-crop="target">
