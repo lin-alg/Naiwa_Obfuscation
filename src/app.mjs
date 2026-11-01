@@ -22,7 +22,10 @@ const PRESETS = [
   { name: '奶蛙翻滚笑', src: './assets/images/animated/1.gif', animated: true },
   { name: '奶蛙的救赎', src: './assets/images/animated/2.gif', animated: true },
 ];
-const state = { encode: [], decode: [], activeEncode: null, activeDecode: null, presetIndex: 0, presetImages: [], presetGifBytes: [], presetsReady: false, settingsTouched: new Set(), encodePaint: 0, decodePaint: 0 };
+const MORPH_BUILTIN_PRESETS = [
+  { key: 'morph:obama', name: 'Obama', src: './assets/images/static/obama.png' },
+];
+const state = { encode: [], decode: [], activeEncode: null, activeDecode: null, presetIndex: 0, presetImages: [], presetGifBytes: [], morphPresetImages: [], presetsReady: false, settingsTouched: new Set(), encodePaint: 0, decodePaint: 0 };
 const pool = new WorkerPool();
 const previews = initializePreviews();
 const activeEntry = kind => state[kind].find(entry => entry.id === state[kind === 'encode' ? 'activeEncode' : 'activeDecode']);
@@ -101,9 +104,12 @@ const phantomTank = initializePhantomTank({
     : action === 'reveal' ? previews.fit('#phantom-reveal-view .phantom-stage') : previews.apply()),
 });
 const morphAnimation = initializeMorphAnimation({
-  getPresets: () => PRESETS.map((preset, index) => ({ key: presetKey(preset), name: preset.name, src: preset.displaySrc ?? preset.src,
-    image: state.presetImages[index], animated: preset.animatedRaster === true || preset.animated === true,
-    staticImage: preset.record?.blob.type !== 'image/svg+xml', remove: preset.filename ? () => removeCustomPreset(preset) : null })),
+  getPresets: () => [
+    ...PRESETS.map((preset, index) => ({ key: presetKey(preset), name: preset.name, src: preset.displaySrc ?? preset.src,
+      image: state.presetImages[index], animated: preset.animatedRaster === true || preset.animated === true,
+      staticImage: preset.record?.blob.type !== 'image/svg+xml', remove: preset.filename ? () => removeCustomPreset(preset) : null })),
+    ...MORPH_BUILTIN_PRESETS.map((preset, index) => ({ ...preset, src: preset.displaySrc ?? preset.src, image: state.morphPresetImages[index] })),
+  ],
   onCustomPreset: async file => { await loadCustomPreset(file); return presetKey(PRESETS[state.presetIndex]); },
   onError: error => showToast(error.message, true),
   onGenerated: () => analytics.recordMorph(),
@@ -562,13 +568,22 @@ function appendPreset(preset, index) {
 
 async function initializePresets() {
   const lastSelected = selectedPreset();
-  const loaded = await Promise.all(PRESETS.map(async preset => {
-    const blob = await loadBuiltinPreset(preset.src); const bytes = preset.animated ? new Uint8Array(await blob.arrayBuffer()) : null;
-    const bitmap = await createImageBitmap(blob); const canvas = bitmapCanvas(bitmap); bitmap.close();
-    preset.displaySrc = URL.createObjectURL(blob);
-    const image = { width: canvas.width, height: canvas.height, data: canvasPixels(canvas) }; canvas.width = canvas.height = 0; return { image, bytes };
-  }));
+  const [loaded, morphPresetImages] = await Promise.all([
+    Promise.all(PRESETS.map(async preset => {
+      const blob = await loadBuiltinPreset(preset.src); const bytes = preset.animated ? new Uint8Array(await blob.arrayBuffer()) : null;
+      const bitmap = await createImageBitmap(blob); const canvas = bitmapCanvas(bitmap); bitmap.close();
+      preset.displaySrc = URL.createObjectURL(blob);
+      const image = { width: canvas.width, height: canvas.height, data: canvasPixels(canvas) }; canvas.width = canvas.height = 0; return { image, bytes };
+    })),
+    Promise.all(MORPH_BUILTIN_PRESETS.map(async preset => {
+      const blob = await loadBuiltinPreset(preset.src);
+      const bitmap = await createImageBitmap(blob); const canvas = bitmapCanvas(bitmap); bitmap.close();
+      preset.displaySrc = URL.createObjectURL(blob);
+      const image = { width: canvas.width, height: canvas.height, data: canvasPixels(canvas) }; canvas.width = canvas.height = 0; return image;
+    })),
+  ]);
   state.presetImages = loaded.map(item => item.image); state.presetGifBytes = loaded.map(item => item.bytes);
+  state.morphPresetImages = morphPresetImages;
   try {
     for (const record of await listPresets()) {
       const rasterHeader = new Uint8Array(await record.blob.slice(0, Math.min(record.blob.size, 4 * 1048576)).arrayBuffer());
