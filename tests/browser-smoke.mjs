@@ -205,8 +205,10 @@ applicationChecks: try {
     const googleEmoji = await evaluate(`(async()=>{const image=[...document.querySelectorAll('#morph-character-presets img')].at(-1),blob=await fetch(image.src).then(response=>response.blob());return {mime:blob.type,title:image.parentElement.title,loaded:image.complete&&image.naturalWidth>0}})()`);
     if (googleEmoji.mime !== 'image/svg+xml' || !googleEmoji.title.includes('Google Noto Emoji') || !googleEmoji.loaded) throw new Error(`Emoji reference must use the Google Noto artwork: ${JSON.stringify(googleEmoji)}`);
     await evaluate(`(()=>{const input=document.querySelector('#morph-character-input');input.value='汉字';document.querySelector('#morph-character-add').click()})()`);
-    await waitFor(`document.querySelector('#toast').textContent.includes('一个字符')`);
-    if (await evaluate(`document.querySelectorAll('#morph-character-presets .morph-character-choice').length!==2`)) throw new Error('Multi-character text was accepted as a character reference');
+    await waitFor(`document.querySelectorAll('#morph-character-presets .morph-character-choice').length===3&&document.querySelector('#morph-preset-name').textContent==='汉字'`);
+    await evaluate(`(()=>{const input=document.querySelector('#morph-character-input');input.value='汉字三';document.querySelector('#morph-character-add').click()})()`);
+    await waitFor(`document.querySelector('#toast').textContent.includes('最多输入两个字符')`);
+    if (await evaluate(`document.querySelectorAll('#morph-character-presets .morph-character-choice').length!==3`)) throw new Error('More than two grapheme characters were accepted as a character reference');
     await evaluate(`document.querySelector('#morph-presets .morph-preset span').closest('button').click()`);
     await waitFor(`document.querySelector('#morph-preset-name').textContent==='奶蛙'`);
 

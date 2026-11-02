@@ -1218,8 +1218,12 @@ export function initializeMorphAnimation({ getPresets, onCustomPreset, onGenerat
     if (state.busy || state.characterLoading) return;
     const value = elements.characterInput.value.trim().normalize('NFC');
     const segments = [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(value)];
-    if (!value || /^\s+$/u.test(value) || segments.length !== 1) {
-      onError(new Error('请输入一个字符；emoji 组合也按一个字符计算。'));
+    if (!value || /^\s+$/u.test(value)) {
+      onError(new Error('请输入字符作为参考图。'));
+      return;
+    }
+    if (segments.length > 2) {
+      onError(new Error('最多输入两个字符；emoji 组合按一个字符计算。'));
       return;
     }
     const existing = state.characterPresets.find(choice => choice.character === value);
